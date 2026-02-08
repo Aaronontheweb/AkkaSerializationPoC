@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Akka.Serialization.MessagePack2" />
     <PackageReference Include="BenchmarkDotNet" />
   </ItemGroup>
 

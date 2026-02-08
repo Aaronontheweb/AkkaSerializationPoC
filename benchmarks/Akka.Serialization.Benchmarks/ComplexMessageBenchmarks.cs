@@ -2,6 +2,7 @@ using System.Buffers;
 using Akka.Actor;
 using Akka.Serialization.MessagePack;
 using Akka.Serialization.V2;
+using Akka.Util.Internal;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Jobs;
 using MessagePack;
@@ -46,12 +47,13 @@ public partial class BenchProtocolSerializer : SerializerV2<IBenchmarkProtocol> 
 // =====================================================================
 
 /// <summary>
-/// Benchmarks comparing three serialization approaches for complex messages
+/// Benchmarks comparing four serialization approaches for complex messages
 /// with nested value objects, collections, and multi-level nesting:
 ///
 /// 1. Newtonsoft.Json (Akka.NET default) — what most users have today
 /// 2. V1 MessagePack (ToBinary() -> byte[]) — same wire format as V2, legacy API shape
-/// 3. V2 MessagePack (source-generated, ICodecWriter on shared buffer) — new API
+/// 3. MsgPackSerializer (Akka.NET's built-in MessagePack) — existing Akka.NET MessagePack serializer
+/// 4. V2 MessagePack (source-generated, ICodecWriter on shared buffer) — new API
 ///
 /// Parameterized by collection size to show scaling behavior.
 /// </summary>
@@ -74,6 +76,10 @@ public class ComplexMessageBenchmarks
     // V1-style MessagePack
     private V1MessagePackComplexSerializer _v1Serializer = null!;
     private byte[] _v1Bytes = null!;
+
+    // Akka.NET MsgPackSerializer (for comparison with V1/V2)
+    private MsgPackSerializer _msgPackSerializer = null!;
+    private byte[] _msgPackBytes = null!;
 
     // V2 pre-serialized
     private byte[] _v2Bytes = null!;
@@ -101,17 +107,21 @@ public class ComplexMessageBenchmarks
         _v2Serializer = new BenchProtocolSerializer();
         _buffer = new ArrayBufferWriter<byte>(4096);
 
-        // V1 setup
-        _v1Serializer = new V1MessagePackComplexSerializer();
-
-        // Legacy Newtonsoft.Json setup
+        // Legacy Newtonsoft.Json setup (must create ActorSystem first!)
         _actorSystem = ActorSystem.Create("complex-benchmark-system");
         _newtonsoftSerializer = ((ExtendedActorSystem)_actorSystem).Serialization
             .FindSerializerForType(typeof(BenchOrder));
 
+        // V1 setup
+        _v1Serializer = new V1MessagePackComplexSerializer();
+
+        // MsgPackSerializer setup (Akka.NET's built-in MessagePack serializer)
+        _msgPackSerializer = new MsgPackSerializer(_actorSystem.AsInstanceOf<ExtendedActorSystem>());
+
         // Pre-serialize for deserialization benchmarks
         _newtonsoftBytes = _newtonsoftSerializer.ToBinary(_message);
         _v1Bytes = _v1Serializer.ToBinary(_message);
+        _msgPackBytes = _msgPackSerializer.ToBinary(_message);
 
         var v2Buffer = new ArrayBufferWriter<byte>(4096);
         var writer = MessagePackCodecProvider.Instance.CreateWriter(v2Buffer);
@@ -148,6 +158,12 @@ public class ComplexMessageBenchmarks
     }
 
     [Benchmark]
+    public byte[] MsgPackSerializer_Serialize()
+    {
+        return _msgPackSerializer.ToBinary(_message);
+    }
+
+    [Benchmark]
     public ArrayBufferWriter<byte> V2_Serialize()
     {
         var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
@@ -169,6 +185,12 @@ public class ComplexMessageBenchmarks
     public BenchOrder V1MessagePack_Deserialize()
     {
         return _v1Serializer.FromBinary(_v1Bytes);
+    }
+
+    [Benchmark]
+    public object MsgPackSerializer_Deserialize()
+    {
+        return _msgPackSerializer.FromBinary(_msgPackBytes, typeof(BenchOrder));
     }
 
     [Benchmark]
