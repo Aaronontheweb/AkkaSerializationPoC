@@ -6,5 +6,13 @@
     <File Path="NuGet.Config" />
     <File Path="README.md" />
   </Folder>
+  <Folder Name="/docs/">
+    <File Path="docs/ARCHITECTURE.md" />
+    <File Path="docs/PHASES.md" />
+  </Folder>
   <Project Path="src/Akka.Console/Akka.Console.csproj" />
+  <Project Path="src/Akka.Serialization.V2/Akka.Serialization.V2.csproj" />
+  <Project Path="src/Akka.Serialization.MessagePack/Akka.Serialization.MessagePack.csproj" />
+  <Project Path="tests/Akka.Serialization.V2.Tests/Akka.Serialization.V2.Tests.csproj" />
+  <Project Path="benchmarks/Akka.Serialization.Benchmarks/Akka.Serialization.Benchmarks.csproj" />
 </Solution>
