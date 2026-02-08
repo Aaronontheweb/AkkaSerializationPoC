@@ -1,3 +1,4 @@
+#if REFERENCE_IMPL
 using Akka.Serialization.V2;
 
 namespace Akka.Serialization.V2.Tests.Messages;
@@ -155,3 +156,4 @@ public partial class AnnotatedMessageSerializer : SerializerV2
         return new OrderPlacedAnnotated(orderId, customerId, amount, placedAt);
     }
 }
+#endif
