@@ -1,30 +1,45 @@
 namespace Akka.Serialization.V2;
 
 /// <summary>
-/// Applied to partial classes to define a serializer module.
-/// The source generator will implement SerializerV2 for this class.
+/// Applied to partial classes that extend <see cref="SerializerV2{TProtocol}"/> to define a serializer module.
+/// The source generator will implement SerializerV2 members for this class, scoped to messages
+/// that implement the protocol interface specified by the generic type parameter.
 /// </summary>
 /// <remarks>
 /// Example usage:
 /// <code>
-/// [AkkaSerializerModule(SerializerId = 5001)]
-/// public partial class UserMessageSerializer { }
+/// [AkkaSerializer(Name = "my-protocol")]
+/// public partial class MySerializer : SerializerV2&lt;IMyProtocol&gt; { }
 /// </code>
 ///
+/// Serializer identity is determined by:
+/// - <see cref="Name"/>: Hashed via FNV-1a to produce a deterministic positive int32 ID.
+/// - <see cref="SerializerId"/>: Explicit override (takes precedence over Name-based hash).
+/// - At least one of Name or SerializerId must be provided.
+///
 /// The generator will:
-/// - Implement SerializerV2 abstract members
-/// - Generate Write() dispatch based on [AkkaSerializable] types
+/// - Implement SerializerV2 abstract members (Identifier, Manifest, Write, Read, SizeHint)
+/// - Generate Write() dispatch based on [AkkaSerializable] types that implement TProtocol
 /// - Generate Read() dispatch based on manifest strings
 /// - Generate field serialization code based on [AkkaField] indices
+/// - Generate a Setup class with BoundTypes containing typeof(TProtocol)
 /// </remarks>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
-public sealed class AkkaSerializerModuleAttribute : Attribute
+public sealed class AkkaSerializerAttribute : Attribute
 {
     /// <summary>
-    /// Gets the unique serializer identifier.
+    /// Gets the logical name for this serializer. Hashed via FNV-1a to produce
+    /// a deterministic positive int32 serializer ID. Overridden by <see cref="SerializerId"/>
+    /// if explicitly set.
+    /// </summary>
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// Gets the explicit serializer identifier override.
+    /// When non-zero, takes precedence over the FNV-1a hash of <see cref="Name"/>.
     /// Must be unique across all serializers in the ActorSystem.
     /// </summary>
-    public required int SerializerId { get; init; }
+    public int SerializerId { get; init; }
 }
 
 /// <summary>

@@ -10,7 +10,7 @@ namespace Akka.Serialization.V2.Tests.Messages;
 /// This completes the partial class defined in AnnotatedMessages.cs, making it a full SerializerV2.
 /// The serialization logic is IDENTICAL to the hand-written serializers to ensure byte-for-byte compatibility.
 /// </summary>
-public partial class AnnotatedMessageSerializer : SerializerV2
+public partial class AnnotatedMessageSerializer
 {
     public override int Identifier => 6001;
 
@@ -132,8 +132,7 @@ public partial class AnnotatedMessageSerializer : SerializerV2
         writer.BeginObject(4);
         writer.WriteGuid(msg.OrderId);
         writer.WriteString(msg.CustomerId);
-        // Handle decimal as double for simplicity
-        writer.WriteDouble((double)msg.Amount);
+        writer.WriteDecimal(msg.Amount);
         writer.WriteDateTimeOffset(msg.PlacedAt);
     }
 
@@ -144,7 +143,7 @@ public partial class AnnotatedMessageSerializer : SerializerV2
         // Read known fields in [AkkaField] index order
         var orderId = reader.ReadGuid();
         var customerId = reader.ReadString() ?? string.Empty;
-        var amount = (decimal)reader.ReadDouble();
+        var amount = reader.ReadDecimal();
         var placedAt = reader.ReadDateTimeOffset();
 
         // Skip unknown trailing fields for forward compatibility

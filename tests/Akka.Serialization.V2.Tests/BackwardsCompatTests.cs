@@ -85,21 +85,15 @@ public class BackwardsCompatTests : IDisposable
 
         // Act - Serialize through adapter via V2 codec
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            adapter.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        adapter.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize through adapter via V2 codec
         var manifest = adapter.Manifest(original);
-        UserCreated deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            deserialized = (UserCreated)adapter.Read(reader, manifest!);
-        }
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (UserCreated)adapter.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -141,21 +135,15 @@ public class BackwardsCompatTests : IDisposable
 
         // Act - Serialize the entire envelope (V2 envelope wrapping legacy-adapted inner message)
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            remoteSerializer.Write(writer, envelope);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        remoteSerializer.Write(writer, envelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        RemoteEnvelope deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = remoteSerializer.Manifest(envelope);
-            deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, manifest!);
-        }
+        var manifest = remoteSerializer.Manifest(envelope);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, manifest!);
 
         // Assert - Envelope metadata preserved
         deserialized.Should().NotBeNull();
@@ -218,18 +206,12 @@ public class BackwardsCompatTests : IDisposable
 
         // Act & Assert - Round-trip UserCreated through legacy adapter
         var createdBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(createdBuffer))
-        {
-            createdSerializer.Write(writer, userCreated);
-            writer.Flush();
-        }
+        var createdWriter = _codecProvider.CreateWriter(createdBuffer);
+        createdSerializer.Write(createdWriter, userCreated);
 
-        UserCreated deserializedCreated;
-        using (var reader = _codecProvider.CreateReader(createdBuffer.WrittenMemory))
-        {
-            var manifest = createdSerializer.Manifest(userCreated);
-            deserializedCreated = (UserCreated)createdSerializer.Read(reader, manifest!);
-        }
+        var createdManifest = createdSerializer.Manifest(userCreated);
+        var createdReader = _codecProvider.CreateReader(createdBuffer.WrittenMemory);
+        var deserializedCreated = (UserCreated)createdSerializer.Read(createdReader, createdManifest!);
 
         deserializedCreated.UserId.Should().Be(userCreated.UserId);
         deserializedCreated.Email.Should().Be(userCreated.Email);
@@ -237,18 +219,12 @@ public class BackwardsCompatTests : IDisposable
 
         // Act & Assert - Round-trip UserUpdated through native V2 serializer
         var updatedBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(updatedBuffer))
-        {
-            updatedSerializer.Write(writer, userUpdated);
-            writer.Flush();
-        }
+        var updatedWriter = _codecProvider.CreateWriter(updatedBuffer);
+        updatedSerializer.Write(updatedWriter, userUpdated);
 
-        UserUpdated deserializedUpdated;
-        using (var reader = _codecProvider.CreateReader(updatedBuffer.WrittenMemory))
-        {
-            var manifest = updatedSerializer.Manifest(userUpdated);
-            deserializedUpdated = (UserUpdated)updatedSerializer.Read(reader, manifest!);
-        }
+        var updatedManifest = updatedSerializer.Manifest(userUpdated);
+        var updatedReader = _codecProvider.CreateReader(updatedBuffer.WrittenMemory);
+        var deserializedUpdated = (UserUpdated)updatedSerializer.Read(updatedReader, updatedManifest!);
 
         deserializedUpdated.UserId.Should().Be(userUpdated.UserId);
         deserializedUpdated.NewEmail.Should().Be(userUpdated.NewEmail);

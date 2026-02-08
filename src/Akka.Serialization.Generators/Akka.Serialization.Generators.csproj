@@ -27,4 +27,10 @@
     <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" Condition="'$(TargetFramework)' != 'netstandard2.0'" />
   </ItemGroup>
 
+  <!-- Analyzer release tracking -->
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
 </Project>

@@ -47,21 +47,15 @@ public class EnvelopeTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _remoteSerializer.Write(writer, envelope);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _remoteSerializer.Write(writer, envelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        RemoteEnvelope deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = _remoteSerializer.Manifest(envelope);
-            deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, manifest!);
-        }
+        var manifest = _remoteSerializer.Manifest(envelope);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -92,21 +86,15 @@ public class EnvelopeTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _ddataSerializer.Write(writer, envelope);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _ddataSerializer.Write(writer, envelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        DDataEnvelope deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = _ddataSerializer.Manifest(envelope);
-            deserialized = (DDataEnvelope)_ddataSerializer.Read(reader, manifest!);
-        }
+        var manifest = _ddataSerializer.Manifest(envelope);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (DDataEnvelope)_ddataSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -142,21 +130,15 @@ public class EnvelopeTests
 
         // Act - Serialize (all three layers write to single buffer)
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _remoteSerializer.Write(writer, remoteEnvelope);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _remoteSerializer.Write(writer, remoteEnvelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        RemoteEnvelope deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = _remoteSerializer.Manifest(remoteEnvelope);
-            deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, manifest!);
-        }
+        var manifest = _remoteSerializer.Manifest(remoteEnvelope);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, manifest!);
 
         // Assert - Verify all three layers
         deserialized.Should().NotBeNull();
@@ -201,21 +183,15 @@ public class EnvelopeTests
 
         // Act - Serialize to a single buffer
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _remoteSerializer.Write(writer, remoteEnvelope);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _remoteSerializer.Write(writer, remoteEnvelope);
 
         // The buffer now contains all three layers serialized in a single contiguous block
         var serializedBytes = buffer.WrittenMemory;
 
         // Assert - We should be able to deserialize successfully
-        RemoteEnvelope deserialized;
-        using (var reader = _codecProvider.CreateReader(serializedBytes))
-        {
-            deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
-        }
+        var reader = _codecProvider.CreateReader(serializedBytes);
+        var deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Verify the entire nested structure was preserved
         deserialized.Should().NotBeNull();
@@ -247,18 +223,12 @@ public class EnvelopeTests
 
         // Act - Serialize envelope
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _remoteSerializer.Write(writer, envelope);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _remoteSerializer.Write(writer, envelope);
 
         // Act - Deserialize envelope and extract inner message
-        RemoteEnvelope deserializedEnvelope;
-        using (var reader = _codecProvider.CreateReader(buffer.WrittenMemory))
-        {
-            deserializedEnvelope = (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
-        }
+        var reader = _codecProvider.CreateReader(buffer.WrittenMemory);
+        var deserializedEnvelope = (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Assert - Verify inner message is correctly deserialized
         deserializedEnvelope.Message.Should().BeOfType<UserCreated>();
