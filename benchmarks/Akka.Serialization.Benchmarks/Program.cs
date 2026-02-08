@@ -1,2 +1,3 @@
-// Placeholder — will be replaced by benchmark runner
-Console.WriteLine("Benchmarks not yet implemented.");
+using BenchmarkDotNet.Running;
+
+BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);

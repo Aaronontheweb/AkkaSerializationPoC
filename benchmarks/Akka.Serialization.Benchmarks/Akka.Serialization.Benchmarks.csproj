@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Akka.Serialization.V2\Akka.Serialization.V2.csproj" />
     <ProjectReference Include="..\..\src\Akka.Serialization.MessagePack\Akka.Serialization.MessagePack.csproj" />
+    <ProjectReference Include="..\..\tests\Akka.Serialization.V2.Tests\Akka.Serialization.V2.Tests.csproj" />
   </ItemGroup>
 
   <ItemGroup>
