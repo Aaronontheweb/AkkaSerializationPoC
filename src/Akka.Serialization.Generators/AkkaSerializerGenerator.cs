@@ -943,6 +943,20 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
     /// Walks all fields recursively and collects unique nested types that need Write/Read helper methods.
     /// Skips types that are [AkkaSerializable] (they already get top-level Write/Read methods).
     /// </summary>
+    /// <remarks>
+    /// Design: Value object helpers (WriteAddress/ReadAddress) are generated as private methods
+    /// per serializer. Cross-serializer sharing was considered but rejected because:
+    /// 1. Generated code duplication has zero maintenance cost — it's generated, not hand-maintained.
+    /// 2. Each generated file is self-contained (no cross-file dependencies).
+    /// 3. JIT inlines these small methods, eliminating runtime overhead of duplication.
+    /// 4. Roslyn generators run per-compilation; cross-assembly sharing would need
+    ///    a new trigger mechanism for value-object-only assemblies.
+    ///
+    /// Wire format note: All sequence collections (List, Array, HashSet, ImmutableList, etc.)
+    /// share the same wire format on the write side (count + elements). Only the read/construction
+    /// side differs (List.Add vs array indexing vs builder pattern). This uniformity is intentional
+    /// and requires no special handling.
+    /// </remarks>
     private static List<NestedTypeInfo> CollectAllNestedTypes(ImmutableArray<SerializableTypeInfo> serializables)
     {
         var result = new List<NestedTypeInfo>();
