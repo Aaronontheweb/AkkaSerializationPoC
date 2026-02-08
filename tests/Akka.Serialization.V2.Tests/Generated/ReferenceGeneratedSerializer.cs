@@ -10,7 +10,7 @@ namespace Akka.Serialization.V2.Tests.Messages;
 /// This completes the partial class defined in AnnotatedMessages.cs, making it a full SerializerV2.
 /// The serialization logic is IDENTICAL to the hand-written serializers to ensure byte-for-byte compatibility.
 /// </summary>
-public partial class AnnotatedMessageSerializer : SerializerV2
+public partial class AnnotatedMessageSerializer
 {
     public override int Identifier => 6001;
 

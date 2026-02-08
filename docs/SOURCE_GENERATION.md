@@ -4,7 +4,13 @@ The Akka.Serialization.Generators package provides a Roslyn incremental source g
 
 ## Quick Start
 
-1. Add attributes to your message types:
+1. Define a **protocol interface** — a marker interface that groups related message types:
+
+```csharp
+public interface IMyProtocol { }
+```
+
+2. Add attributes to your message types. Each type must implement the protocol interface:
 
 ```csharp
 using Akka.Serialization.V2;
@@ -13,17 +19,43 @@ using Akka.Serialization.V2;
 public sealed record UserCreated(
     [property: AkkaField(0)] string UserId,
     [property: AkkaField(1)] string Email,
-    [property: AkkaField(2)] DateTime CreatedAt);
+    [property: AkkaField(2)] DateTime CreatedAt) : IMyProtocol;
 ```
 
-2. Create a serializer module (partial class):
+3. Create a serializer module — a partial class extending `SerializerV2<TProtocol>`:
 
 ```csharp
-[AkkaSerializerModule(SerializerId = 5001)]
-public partial class MySerializer { }
+[AkkaSerializer(Name = "my-protocol")]
+public partial class MySerializer : SerializerV2<IMyProtocol> { }
 ```
 
-3. The generator produces the full `SerializerV2` implementation — `Write`, `Read`, `Manifest`, and `SizeHint` — plus a `MySerializerSetup` metadata class.
+4. The generator produces the full `SerializerV2` implementation — `Identifier`, `Write`, `Read`, `Manifest`, and `SizeHint` — plus a `MySerializerSetup` metadata class with `BoundTypes` containing `typeof(IMyProtocol)`.
+
+## Protocol Interface Pattern
+
+The generic type parameter on `SerializerV2<TProtocol>` defines a **protocol scope**. Only `[AkkaSerializable]` types that implement `TProtocol` are included in that serializer. This design:
+
+- **Supports multiple serializers per compilation** — each scoped to its own protocol interface
+- **Enforces protocol grouping** — types must explicitly opt into a protocol
+- **Enables interface-based registration** — `SerializerRegistry` resolves serializers by walking the type's interfaces
+
+```csharp
+// Two separate protocols in the same project — each gets its own serializer
+public interface IInventoryProtocol { }
+public interface IShippingProtocol { }
+
+[AkkaSerializable(Manifest = "item-added-v1")]
+public sealed record ItemAdded(...) : IInventoryProtocol;
+
+[AkkaSerializable(Manifest = "shipment-created-v1")]
+public sealed record ShipmentCreated(...) : IShippingProtocol;
+
+[AkkaSerializer(Name = "inventory-protocol")]
+public partial class InventorySerializer : SerializerV2<IInventoryProtocol> { }
+
+[AkkaSerializer(Name = "shipping-protocol")]
+public partial class ShippingSerializer : SerializerV2<IShippingProtocol> { }
+```
 
 ## Attributes
 
@@ -33,6 +65,7 @@ Marks a type for serialization. Applied to `record`, `class`, or `struct` types.
 
 - **Manifest** (required): A stable string identifier for this type on the wire. Once published, never change it — changing a manifest is a breaking wire format change.
 - Manifests should be versioned (e.g., `"user-created-v1"`) to allow future schema evolution.
+- The type **must implement the protocol interface** of the serializer that will handle it.
 
 ### `[AkkaField(int index)]`
 
@@ -41,13 +74,54 @@ Marks a property for serialization and assigns its positional index.
 - **Index** (required): Zero-based field position in the serialized array. Fields are written/read in index order.
 - Applied via `[property: AkkaField(N)]` on record constructor parameters, or directly on properties.
 
-### `[AkkaSerializerModule(SerializerId = N)]`
+### `[AkkaSerializer(Name = "...", SerializerId = N)]`
 
-Marks a partial class as the target for the generated serializer implementation.
+Marks a partial class extending `SerializerV2<TProtocol>` as the target for the generated serializer.
 
-- **SerializerId** (required): Unique integer identifier, matching the Akka.NET serializer configuration.
-- The class must be `partial` — the generator fills in the implementation.
-- All `[AkkaSerializable]` types in the same compilation are included in this serializer.
+- **Name** (recommended): A logical name for the serializer. Hashed via FNV-1a to produce a deterministic positive `int32` serializer ID.
+- **SerializerId** (optional): Explicit ID override. When non-zero, takes precedence over the FNV-1a hash of Name.
+- At least one of `Name` or `SerializerId` must be provided.
+- The class must be `partial` and must extend `SerializerV2<TProtocol>`.
+
+## Serializer ID Assignment
+
+There are two ways to assign a serializer ID:
+
+### 1. Name-based (recommended)
+
+Provide a `Name` string. The generator computes a deterministic positive `int32` via FNV-1a hashing:
+
+```csharp
+[AkkaSerializer(Name = "my-protocol")]  // ID computed from "my-protocol"
+public partial class MySerializer : SerializerV2<IMyProtocol> { }
+```
+
+The computed ID is reported as an AKKA011 info diagnostic so you can see it at build time.
+
+### 2. Explicit override
+
+Provide a `SerializerId` integer directly. This takes precedence over any Name-based hash:
+
+```csharp
+[AkkaSerializer(Name = "my-protocol", SerializerId = 6001)]  // ID = 6001, ignores hash
+public partial class MySerializer : SerializerV2<IMyProtocol> { }
+```
+
+Use explicit IDs for backwards compatibility with existing serializer configurations.
+
+### FNV-1a Hash Algorithm
+
+The hash is computed over UTF-8 bytes of the Name string, then masked to a positive 31-bit int:
+
+```
+FNV offset basis = 2166136261
+FNV prime = 16777619
+hash = offset_basis
+for each byte in UTF8(name):
+    hash = hash XOR byte
+    hash = hash * prime
+result = hash AND 0x7FFFFFFF  // ensure positive
+```
 
 ## Field Ordering Rules
 
@@ -85,14 +159,14 @@ Add the field at the next available index. Old data with fewer fields will use t
 [AkkaSerializable(Manifest = "user-created-v1")]
 public sealed record UserCreated(
     [property: AkkaField(0)] string UserId,
-    [property: AkkaField(1)] string Email);
+    [property: AkkaField(1)] string Email) : IMyProtocol;
 
 // V2: 3 fields — old data still deserializes correctly
 [AkkaSerializable(Manifest = "user-created-v1")]
 public sealed record UserCreated(
     [property: AkkaField(0)] string UserId,
     [property: AkkaField(1)] string Email,
-    [property: AkkaField(2)] DateTime CreatedAt);  // defaults to default(DateTime) for old data
+    [property: AkkaField(2)] DateTime CreatedAt) : IMyProtocol;  // defaults to default(DateTime) for old data
 ```
 
 **Keep the same manifest** — the version suffix is for documentation, not automatic version routing.
@@ -133,20 +207,25 @@ The generator reports compile-time diagnostics:
 | AKKA001 | Error | `[AkkaSerializable]` type has zero `[AkkaField]` properties |
 | AKKA002 | Warning | Field indices have gaps (e.g., 0, 2, 5 — missing 1) |
 | AKKA003 | Error | Property has an unsupported type |
-| AKKA004 | Warning | `[AkkaSerializable]` types exist but no `[AkkaSerializerModule]` was found |
+| AKKA004 | Warning | `[AkkaSerializable]` types exist but no `[AkkaSerializer]` was found |
 | AKKA006 | Error | Duplicate field indices on the same type |
 | AKKA007 | Error | Duplicate manifests across types in the same module |
+| AKKA008 | Warning | Orphaned `[AkkaSerializable]` type — not covered by any module's protocol interface |
+| AKKA009 | Error | `[AkkaSerializer]` must specify either `Name` or `SerializerId` |
+| AKKA010 | Error | Serializer ID collision between multiple `[AkkaSerializer]` modules |
+| AKKA011 | Info | Computed serializer ID from `Name` via FNV-1a (informational) |
 
 ## Generated Code
 
-For a module `MySerializer` with types `UserCreated` and `OrderPlaced`, the generator produces:
+For a module `MySerializer` with protocol `IMyProtocol` and types `UserCreated` and `OrderPlaced`, the generator produces:
 
 ### Serializer class
 
 ```csharp
-public partial class MySerializer : SerializerV2
+// No base class in the generated partial — user's partial already has : SerializerV2<IMyProtocol>
+public partial class MySerializer
 {
-    public override int Identifier => 5001;
+    public override int Identifier => 1234567;  // FNV-1a hash of Name, or explicit SerializerId
 
     public override string? Manifest(object obj) => obj switch
     {
@@ -173,7 +252,8 @@ public sealed class MySerializerSetup
 {
     public static readonly MySerializerSetup Instance = new();
     public Type SerializerType => typeof(MySerializer);
-    public static Type[] BoundTypes => new Type[] { typeof(UserCreated), typeof(OrderPlaced) };
+    // BoundTypes contains the protocol interface, NOT individual concrete types
+    public static Type[] BoundTypes => new Type[] { typeof(IMyProtocol) };
 }
 ```
 
@@ -184,7 +264,20 @@ public sealed class MySerializerSetup
 ```csharp
 var registry = new SerializerRegistry();
 var serializer = new MySerializer();
+// Register with the protocol interface — registry walks interfaces to resolve concrete types
 registry.Register(serializer, MySerializerSetup.BoundTypes);
+```
+
+### Multiple serializers
+
+```csharp
+var registry = new SerializerRegistry();
+registry.Register(new InventorySerializer(), InventorySerializerSetup.BoundTypes);
+registry.Register(new ShippingSerializer(), ShippingSerializerSetup.BoundTypes);
+
+// Each type resolves to its protocol's serializer
+registry.FindFor(new ItemAdded(...));       // → InventorySerializer
+registry.FindFor(new ShipmentCreated(...)); // → ShippingSerializer
 ```
 
 ### With ActorSystem (for ActorRef resolution)
@@ -197,15 +290,39 @@ registry.Register(serializer, MySerializerSetup.BoundTypes);
 // serializer.System is now set, enabling ActorRef path resolution
 ```
 
-## Migration Strategy (Legacy to V2)
+## Migration from `[AkkaSerializerModule]`
 
-1. **Wrap existing serializers**: Use `SerializerV2Adapter` to wrap legacy `Serializer`/`SerializerWithStringManifest` implementations. This lets legacy-serialized messages live inside V2 envelopes immediately.
+If you previously used the `[AkkaSerializerModule]` pattern:
 
-2. **Add V2 serializers alongside legacy**: Register new V2 serializers for new message types. Old messages continue using the adapter.
+### Before (old pattern)
 
-3. **Migrate incrementally**: Convert message types one at a time from legacy to V2. The `SerializerRegistry` routes each type to the correct serializer.
+```csharp
+[AkkaSerializerModule(SerializerId = 5001)]
+public partial class MySerializer { }
 
-4. **Byte-identity verification**: The generator produces identical wire format to hand-written serializers. Use byte-identity tests to verify migration correctness.
+// All [AkkaSerializable] types in the compilation were included
+[AkkaSerializable(Manifest = "user-created-v1")]
+public sealed record UserCreated(...);
+```
+
+### After (new pattern)
+
+```csharp
+// 1. Define a protocol interface
+public interface IMyProtocol { }
+
+// 2. Message types implement the protocol
+[AkkaSerializable(Manifest = "user-created-v1")]
+public sealed record UserCreated(...) : IMyProtocol;
+
+// 3. Serializer extends SerializerV2<TProtocol> and uses [AkkaSerializer]
+[AkkaSerializer(Name = "my-protocol", SerializerId = 5001)]  // keep old ID for compat
+public partial class MySerializer : SerializerV2<IMyProtocol> { }
+
+// 4. Register with protocol interface instead of individual types
+registry.Register(serializer, typeof(IMyProtocol));
+// instead of: registry.Register(serializer, typeof(UserCreated), typeof(OrderPlaced), ...);
+```
 
 ## Nested Types
 
@@ -216,7 +333,7 @@ public class MyActor
 {
     [AkkaSerializable(Manifest = "create-user-v1")]
     public sealed record CreateUser(
-        [property: AkkaField(0)] string Name);
+        [property: AkkaField(0)] string Name) : IMyProtocol;
 }
 ```
 

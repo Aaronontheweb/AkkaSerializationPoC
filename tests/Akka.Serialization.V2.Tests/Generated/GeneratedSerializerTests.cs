@@ -20,10 +20,9 @@ public class GeneratedSerializerTests
     public void Generated_InEnvelope_RoundTrip()
     {
         // The generated serializer should work inside a RemoteEnvelope
-        // via the SerializerRegistry
+        // via the SerializerRegistry, registered by protocol interface
         var registry = new SerializerRegistry();
-        registry.Register(_generatedSerializer,
-            typeof(UserCreatedAnnotated), typeof(UserUpdatedAnnotated), typeof(OrderPlacedAnnotated));
+        registry.Register(_generatedSerializer, typeof(IAnnotatedProtocol));
 
         var remoteSerializer = new RemoteEnvelopeSerializer(registry);
         registry.Register(remoteSerializer, typeof(RemoteEnvelope));
@@ -64,5 +63,28 @@ public class GeneratedSerializerTests
     public void Generated_Identifier_MatchesAttribute()
     {
         _generatedSerializer.Identifier.Should().Be(6001);
+    }
+
+    [Fact]
+    public void Generated_BoundTypes_ContainsProtocolInterface()
+    {
+        // BoundTypes should contain the protocol interface, not individual concrete types
+        AnnotatedMessageSerializerSetup.BoundTypes.Should().ContainSingle()
+            .Which.Should().Be(typeof(IAnnotatedProtocol));
+    }
+
+    [Fact]
+    public void Generated_Registry_ResolvesViaInterface()
+    {
+        // Registering with the protocol interface should resolve for concrete types
+        var registry = new SerializerRegistry();
+        registry.Register(_generatedSerializer, typeof(IAnnotatedProtocol));
+
+        registry.FindFor(new UserCreatedAnnotated("x", "y", DateTime.UtcNow))
+            .Should().BeSameAs(_generatedSerializer);
+        registry.FindFor(new UserUpdatedAnnotated("x", null, null, DateTime.UtcNow))
+            .Should().BeSameAs(_generatedSerializer);
+        registry.FindFor(new OrderPlacedAnnotated(Guid.Empty, "c", 0m, DateTimeOffset.UtcNow))
+            .Should().BeSameAs(_generatedSerializer);
     }
 }

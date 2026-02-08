@@ -12,12 +12,13 @@ namespace Akka.Serialization.Generators;
 
 /// <summary>
 /// Roslyn incremental source generator that produces SerializerV2 implementations
-/// for types annotated with [AkkaSerializerModule] and [AkkaSerializable].
+/// for types annotated with [AkkaSerializer] that extend SerializerV2&lt;TProtocol&gt;.
+/// Only [AkkaSerializable] types that implement the module's TProtocol interface are included.
 /// </summary>
 [Generator]
 public class AkkaSerializerGenerator : IIncrementalGenerator
 {
-    private const string SerializerModuleAttributeFullName = "Akka.Serialization.V2.AkkaSerializerModuleAttribute";
+    private const string SerializerAttributeFullName = "Akka.Serialization.V2.AkkaSerializerAttribute";
     private const string SerializableAttributeFullName = "Akka.Serialization.V2.AkkaSerializableAttribute";
     private const string FieldAttributeFullName = "Akka.Serialization.V2.AkkaFieldAttribute";
 
@@ -39,7 +40,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
 
     private static readonly DiagnosticDescriptor NoModuleDiagnostic = new DiagnosticDescriptor(
         "AKKA004", "No serializer module",
-        "[AkkaSerializable] types exist but no [AkkaSerializerModule] class was found",
+        "[AkkaSerializable] types exist but no [AkkaSerializer] class was found",
         "Akka.Serialization", DiagnosticSeverity.Warning, isEnabledByDefault: true);
 
     private static readonly DiagnosticDescriptor DuplicateFieldIndexDiagnostic = new DiagnosticDescriptor(
@@ -52,12 +53,32 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         "Multiple [AkkaSerializable] types share manifest '{0}': {1}",
         "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor OrphanedTypeDiagnostic = new DiagnosticDescriptor(
+        "AKKA008", "Orphaned serializable type",
+        "[AkkaSerializable] type '{0}' does not implement any protocol interface used by an [AkkaSerializer] module",
+        "Akka.Serialization", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor NoNameOrIdDiagnostic = new DiagnosticDescriptor(
+        "AKKA009", "No Name or SerializerId",
+        "[AkkaSerializer] class '{0}' must specify either Name or SerializerId",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor IdCollisionDiagnostic = new DiagnosticDescriptor(
+        "AKKA010", "Serializer ID collision",
+        "Serializer ID {0} is used by multiple [AkkaSerializer] classes: {1}",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor ComputedIdInfoDiagnostic = new DiagnosticDescriptor(
+        "AKKA011", "Computed serializer ID",
+        "[AkkaSerializer] class '{0}' with Name '{1}' has computed serializer ID {2}",
+        "Akka.Serialization", DiagnosticSeverity.Info, isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        // Step 1: Find all types with [AkkaSerializerModule]
+        // Step 1: Find all types with [AkkaSerializer]
         var moduleProvider = context.SyntaxProvider
             .ForAttributeWithMetadataName(
-                SerializerModuleAttributeFullName,
+                SerializerAttributeFullName,
                 predicate: static (node, _) => node is ClassDeclarationSyntax,
                 transform: static (ctx, ct) => ExtractModuleInfo(ctx, ct))
             .Where(static m => m != null);
@@ -75,39 +96,135 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         // Step 3: Collect all serializable types into an array
         var serializableCollection = serializableProvider.Collect();
 
-        // Step 4: Combine each module with all serializable types and compilation
+        // Step 4: Combine each module with all serializable types
         var combined = moduleProvider.Combine(serializableCollection);
 
-        // Step 5: Register source output
+        // Step 5: Register source output — one per module
         context.RegisterSourceOutput(combined, static (spc, pair) =>
         {
             var module = pair.Left;
-            var serializables = pair.Right;
+            var allSerializables = pair.Right;
 
             if (module == null)
                 return;
 
-            // Validate and report diagnostics
-            ValidateSerializables(spc, serializables);
-            ValidateManifestUniqueness(spc, serializables);
+            // AKKA009: Must have Name or SerializerId
+            if (string.IsNullOrEmpty(module.Name) && module.ExplicitSerializerId == 0)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(NoNameOrIdDiagnostic, Location.None, module.ClassName));
+                return;
+            }
 
-            var source = GenerateSerializerCode(module, serializables);
+            // AKKA011: Report computed ID for Name-only modules
+            if (!string.IsNullOrEmpty(module.Name) && module.ExplicitSerializerId == 0)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(ComputedIdInfoDiagnostic, Location.None,
+                    module.ClassName, module.Name, module.SerializerId));
+            }
+
+            // Filter serializable types to only those implementing this module's protocol interface
+            var filteredSerializables = FilterByProtocol(allSerializables, module.ProtocolTypeFullName);
+
+            // Validate and report diagnostics on filtered types
+            ValidateSerializables(spc, filteredSerializables);
+            ValidateManifestUniqueness(spc, filteredSerializables);
+
+            var source = GenerateSerializerCode(module, filteredSerializables);
             var hintName = module.ClassName + ".g.cs";
             spc.AddSource(hintName, source);
         });
 
-        // Step 6: AKKA004 - Warn if [AkkaSerializable] types exist but no module found
+        // Step 6: Cross-module validation (AKKA004, AKKA008, AKKA010)
         var moduleCollection = moduleProvider.Collect();
-        var noModuleCheck = serializableCollection.Combine(moduleCollection);
-        context.RegisterSourceOutput(noModuleCheck, static (spc, pair) =>
+        var crossModuleCheck = serializableCollection.Combine(moduleCollection);
+        context.RegisterSourceOutput(crossModuleCheck, static (spc, pair) =>
         {
             var serializables = pair.Left;
             var modules = pair.Right;
+
+            // AKKA004: No modules found
             if (serializables.Length > 0 && modules.Length == 0)
             {
                 spc.ReportDiagnostic(Diagnostic.Create(NoModuleDiagnostic, Location.None));
             }
+
+            // AKKA008: Orphaned types — not implemented by any module's protocol
+            if (modules.Length > 0)
+            {
+                var protocolTypes = new HashSet<string>();
+                for (int i = 0; i < modules.Length; i++)
+                {
+                    if (modules[i] != null && !string.IsNullOrEmpty(modules[i].ProtocolTypeFullName))
+                        protocolTypes.Add(modules[i].ProtocolTypeFullName);
+                }
+
+                for (int i = 0; i < serializables.Length; i++)
+                {
+                    var s = serializables[i];
+                    if (s == null) continue;
+
+                    bool matched = false;
+                    foreach (var proto in protocolTypes)
+                    {
+                        if (s.ImplementsInterface(proto))
+                        {
+                            matched = true;
+                            break;
+                        }
+                    }
+
+                    if (!matched)
+                    {
+                        spc.ReportDiagnostic(Diagnostic.Create(OrphanedTypeDiagnostic, Location.None, s.SimpleName));
+                    }
+                }
+            }
+
+            // AKKA010: ID collisions across modules
+            if (modules.Length > 1)
+            {
+                var idMap = new Dictionary<int, List<string>>();
+                for (int i = 0; i < modules.Length; i++)
+                {
+                    var m = modules[i];
+                    if (m == null) continue;
+                    if (!idMap.TryGetValue(m.SerializerId, out var list))
+                    {
+                        list = new List<string>();
+                        idMap[m.SerializerId] = list;
+                    }
+                    list.Add(m.ClassName);
+                }
+
+                foreach (var kvp in idMap)
+                {
+                    if (kvp.Value.Count > 1)
+                    {
+                        spc.ReportDiagnostic(Diagnostic.Create(IdCollisionDiagnostic, Location.None,
+                            kvp.Key, string.Join(", ", kvp.Value)));
+                    }
+                }
+            }
         });
+    }
+
+    private static ImmutableArray<SerializableTypeInfo> FilterByProtocol(
+        ImmutableArray<SerializableTypeInfo> allSerializables,
+        string protocolTypeFullName)
+    {
+        if (string.IsNullOrEmpty(protocolTypeFullName))
+            return ImmutableArray<SerializableTypeInfo>.Empty;
+
+        var builder = ImmutableArray.CreateBuilder<SerializableTypeInfo>();
+        for (int i = 0; i < allSerializables.Length; i++)
+        {
+            var s = allSerializables[i];
+            if (s != null && s.ImplementsInterface(protocolTypeFullName))
+            {
+                builder.Add(s);
+            }
+        }
+        return builder.ToImmutable();
     }
 
     private static void ValidateSerializables(
@@ -176,7 +293,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         SourceProductionContext spc,
         ImmutableArray<SerializableTypeInfo> serializables)
     {
-        // AKKA007: Duplicate manifests
+        // AKKA007: Duplicate manifests within this module's scope
         var manifestMap = new Dictionary<string, List<string>>();
         for (int i = 0; i < serializables.Length; i++)
         {
@@ -207,23 +324,46 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
     {
         var symbol = (INamedTypeSymbol)context.TargetSymbol;
 
-        // Extract SerializerId from the attribute
+        // Extract Name and SerializerId from the attribute
         var attr = context.Attributes[0];
-        int serializerId = 0;
+        string name = null;
+        int explicitSerializerId = 0;
 
         foreach (var named in attr.NamedArguments)
         {
-            if (named.Key == "SerializerId" && named.Value.Value is int id)
+            if (named.Key == "Name" && named.Value.Value is string n)
             {
-                serializerId = id;
+                name = n;
             }
+            else if (named.Key == "SerializerId" && named.Value.Value is int id)
+            {
+                explicitSerializerId = id;
+            }
+        }
+
+        // Walk BaseType chain to find SerializerV2<T>
+        string protocolTypeFullName = null;
+        string protocolTypeSimpleName = null;
+        var baseType = symbol.BaseType;
+        while (baseType != null)
+        {
+            var originalDef = baseType.OriginalDefinition;
+            if (originalDef.Name == "SerializerV2" && originalDef.Arity == 1
+                && GetFullNamespace(originalDef) == "Akka.Serialization.V2")
+            {
+                var typeArg = baseType.TypeArguments[0];
+                protocolTypeFullName = typeArg.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                protocolTypeSimpleName = typeArg.Name;
+                break;
+            }
+            baseType = baseType.BaseType;
         }
 
         // Get the fully qualified namespace
         var namespaceName = GetFullNamespace(symbol);
         var className = symbol.Name;
 
-        return new ModuleInfo(namespaceName, className, serializerId);
+        return new ModuleInfo(namespaceName, className, name, protocolTypeFullName, protocolTypeSimpleName, explicitSerializerId);
     }
 
     private static SerializableTypeInfo ExtractSerializableInfo(
@@ -248,6 +388,9 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         var fullyQualifiedName = GetFullyQualifiedTypeName(symbol);
         // Also get the simple name for method naming
         var simpleName = symbol.Name;
+
+        // Collect all implemented interfaces and base types (fully qualified)
+        var implementedTypes = CollectImplementedTypes(symbol);
 
         // Extract [AkkaField] properties
         var fields = new List<FieldInfo>();
@@ -280,7 +423,28 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         // Sort fields by index
         fields.Sort((a, b) => a.Index.CompareTo(b.Index));
 
-        return new SerializableTypeInfo(fullyQualifiedName, simpleName, manifest, fields.ToArray());
+        return new SerializableTypeInfo(fullyQualifiedName, simpleName, manifest, fields.ToArray(), implementedTypes);
+    }
+
+    private static string[] CollectImplementedTypes(INamedTypeSymbol symbol)
+    {
+        var result = new List<string>();
+
+        // All interfaces
+        foreach (var iface in symbol.AllInterfaces)
+        {
+            result.Add(iface.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+        }
+
+        // Walk base types
+        var current = symbol.BaseType;
+        while (current != null && current.SpecialType != SpecialType.System_Object)
+        {
+            result.Add(current.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+            current = current.BaseType;
+        }
+
+        return result.ToArray();
     }
 
     private static string GetFullyQualifiedTypeName(INamedTypeSymbol symbol)
@@ -416,7 +580,8 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
             sb.AppendLine();
         }
 
-        sb.AppendLine("public partial class " + module.ClassName + " : Akka.Serialization.V2.SerializerV2");
+        // Emit partial class WITHOUT base class (user's partial already has : SerializerV2<T>)
+        sb.AppendLine("public partial class " + module.ClassName);
         sb.AppendLine("{");
 
         // Identifier property
@@ -458,12 +623,8 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         sb.AppendLine("}");
         sb.AppendLine();
 
-        // Generate SerializerSetup class (always)
+        // Generate SerializerSetup class
         GenerateSerializerSetup(sb, module, serializables);
-
-        // Note: Akka.Hosting extension method is NOT generated because
-        // SerializerV2 is not a subclass of Akka.Serialization.Serializer.
-        // V2 serializers need their own Akka.Hosting registration API.
 
         return sb.ToString();
     }
@@ -474,11 +635,6 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         ImmutableArray<SerializableTypeInfo> serializables)
     {
         var setupClassName = module.ClassName + "Setup";
-
-        if (!string.IsNullOrEmpty(module.Namespace))
-        {
-            // Already in same namespace from file-scoped namespace
-        }
 
         sb.AppendLine("/// <summary>");
         sb.AppendLine("/// SerializerSetup for " + module.ClassName + ". Use with Akka.NET configuration.");
@@ -491,15 +647,12 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         sb.AppendLine("    public System.Type SerializerType => typeof(" + module.ClassName + ");");
         sb.AppendLine();
 
-        // Bound types
+        // BoundTypes — emit typeof(TProtocol) (the interface) instead of individual concrete types
         sb.AppendLine("    public static System.Type[] BoundTypes => new System.Type[]");
         sb.AppendLine("    {");
-        for (int i = 0; i < serializables.Length; i++)
+        if (!string.IsNullOrEmpty(module.ProtocolTypeFullName))
         {
-            var s = serializables[i];
-            if (s == null) continue;
-            var comma = i < serializables.Length - 1 ? "," : "";
-            sb.AppendLine("        typeof(" + s.FullyQualifiedName + ")" + comma);
+            sb.AppendLine("        typeof(" + module.ProtocolTypeFullName + ")");
         }
         sb.AppendLine("    };");
 
@@ -658,30 +811,27 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         sb.AppendLine("    }");
     }
 
+    /// <summary>
+    /// Computes an FNV-1a hash of the input string, returning a positive 31-bit int.
+    /// </summary>
+    internal static int ComputeFnv1aHash(string input)
+    {
+        const uint FnvOffsetBasis = 2166136261u;
+        const uint FnvPrime = 16777619u;
+        uint hash = FnvOffsetBasis;
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(input);
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            hash ^= bytes[i];
+            hash *= FnvPrime;
+        }
+        return (int)(hash & 0x7FFFFFFF); // mask to positive int32
+    }
+
     private static string ToCamelCase(string name)
     {
         if (string.IsNullOrEmpty(name)) return name;
         return char.ToLowerInvariant(name[0]) + name.Substring(1);
-    }
-
-    private static string ToKebabCase(string name)
-    {
-        if (string.IsNullOrEmpty(name)) return name;
-        var sb = new StringBuilder();
-        for (int i = 0; i < name.Length; i++)
-        {
-            var c = name[i];
-            if (char.IsUpper(c))
-            {
-                if (i > 0) sb.Append('-');
-                sb.Append(char.ToLowerInvariant(c));
-            }
-            else
-            {
-                sb.Append(c);
-            }
-        }
-        return sb.ToString();
     }
 
     private static string GetFullNamespace(ISymbol symbol)
@@ -722,13 +872,34 @@ internal sealed class ModuleInfo : IEquatable<ModuleInfo>
 {
     public string Namespace { get; }
     public string ClassName { get; }
-    public int SerializerId { get; }
+    public string Name { get; }
+    public string ProtocolTypeFullName { get; }
+    public string ProtocolTypeSimpleName { get; }
+    public int ExplicitSerializerId { get; }
 
-    public ModuleInfo(string ns, string className, int serializerId)
+    /// <summary>
+    /// Returns the effective serializer ID: explicit if set, otherwise FNV-1a hash of Name.
+    /// </summary>
+    public int SerializerId
+    {
+        get
+        {
+            if (ExplicitSerializerId != 0)
+                return ExplicitSerializerId;
+            if (!string.IsNullOrEmpty(Name))
+                return AkkaSerializerGenerator.ComputeFnv1aHash(Name);
+            return 0;
+        }
+    }
+
+    public ModuleInfo(string ns, string className, string name, string protocolTypeFullName, string protocolTypeSimpleName, int explicitSerializerId)
     {
         Namespace = ns;
         ClassName = className;
-        SerializerId = serializerId;
+        Name = name;
+        ProtocolTypeFullName = protocolTypeFullName;
+        ProtocolTypeSimpleName = protocolTypeSimpleName;
+        ExplicitSerializerId = explicitSerializerId;
     }
 
     public bool Equals(ModuleInfo other)
@@ -736,7 +907,10 @@ internal sealed class ModuleInfo : IEquatable<ModuleInfo>
         if (other == null) return false;
         return Namespace == other.Namespace
             && ClassName == other.ClassName
-            && SerializerId == other.SerializerId;
+            && Name == other.Name
+            && ProtocolTypeFullName == other.ProtocolTypeFullName
+            && ProtocolTypeSimpleName == other.ProtocolTypeSimpleName
+            && ExplicitSerializerId == other.ExplicitSerializerId;
     }
 
     public override bool Equals(object obj) => Equals(obj as ModuleInfo);
@@ -747,7 +921,9 @@ internal sealed class ModuleInfo : IEquatable<ModuleInfo>
             int hash = 17;
             hash = hash * 31 + (Namespace != null ? Namespace.GetHashCode() : 0);
             hash = hash * 31 + (ClassName != null ? ClassName.GetHashCode() : 0);
-            hash = hash * 31 + SerializerId.GetHashCode();
+            hash = hash * 31 + (Name != null ? Name.GetHashCode() : 0);
+            hash = hash * 31 + (ProtocolTypeFullName != null ? ProtocolTypeFullName.GetHashCode() : 0);
+            hash = hash * 31 + ExplicitSerializerId.GetHashCode();
             return hash;
         }
     }
@@ -759,13 +935,28 @@ internal sealed class SerializableTypeInfo : IEquatable<SerializableTypeInfo>
     public string SimpleName { get; }
     public string Manifest { get; }
     public FieldInfo[] Fields { get; }
+    public string[] ImplementedTypes { get; }
 
-    public SerializableTypeInfo(string fullyQualifiedName, string simpleName, string manifest, FieldInfo[] fields)
+    public SerializableTypeInfo(string fullyQualifiedName, string simpleName, string manifest, FieldInfo[] fields, string[] implementedTypes)
     {
         FullyQualifiedName = fullyQualifiedName;
         SimpleName = simpleName;
         Manifest = manifest;
         Fields = fields;
+        ImplementedTypes = implementedTypes ?? Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// Checks if this type implements the given interface (by fully qualified name).
+    /// </summary>
+    public bool ImplementsInterface(string fullName)
+    {
+        for (int i = 0; i < ImplementedTypes.Length; i++)
+        {
+            if (ImplementedTypes[i] == fullName)
+                return true;
+        }
+        return false;
     }
 
     public bool Equals(SerializableTypeInfo other)
@@ -774,12 +965,18 @@ internal sealed class SerializableTypeInfo : IEquatable<SerializableTypeInfo>
         if (FullyQualifiedName != other.FullyQualifiedName
             || SimpleName != other.SimpleName
             || Manifest != other.Manifest
-            || Fields.Length != other.Fields.Length)
+            || Fields.Length != other.Fields.Length
+            || ImplementedTypes.Length != other.ImplementedTypes.Length)
             return false;
 
         for (int i = 0; i < Fields.Length; i++)
         {
             if (!Fields[i].Equals(other.Fields[i]))
+                return false;
+        }
+        for (int i = 0; i < ImplementedTypes.Length; i++)
+        {
+            if (ImplementedTypes[i] != other.ImplementedTypes[i])
                 return false;
         }
         return true;
@@ -795,6 +992,7 @@ internal sealed class SerializableTypeInfo : IEquatable<SerializableTypeInfo>
             hash = hash * 31 + (SimpleName != null ? SimpleName.GetHashCode() : 0);
             hash = hash * 31 + (Manifest != null ? Manifest.GetHashCode() : 0);
             hash = hash * 31 + Fields.Length.GetHashCode();
+            hash = hash * 31 + ImplementedTypes.Length.GetHashCode();
             return hash;
         }
     }

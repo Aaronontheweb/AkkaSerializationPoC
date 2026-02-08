@@ -70,3 +70,31 @@ public abstract class SerializerV2
     /// <returns>Estimated serialized size in bytes</returns>
     public virtual int SizeHint(object obj) => 256;
 }
+
+/// <summary>
+/// Generic base class for protocol-scoped serializers.
+/// The type parameter <typeparamref name="TProtocol"/> defines a marker interface
+/// that scopes which message types belong to this serializer.
+/// </summary>
+/// <typeparam name="TProtocol">
+/// A marker interface that all message types handled by this serializer must implement.
+/// The source generator uses this to filter which [AkkaSerializable] types are included.
+/// </typeparam>
+/// <remarks>
+/// Example usage:
+/// <code>
+/// // Define a protocol interface
+/// public interface IMyProtocol { }
+///
+/// // Messages implement the protocol
+/// [AkkaSerializable(Manifest = "user-created-v1")]
+/// public sealed record UserCreated(...) : IMyProtocol;
+///
+/// // Serializer is scoped to the protocol
+/// [AkkaSerializer(Name = "my-protocol")]
+/// public partial class MySerializer : SerializerV2&lt;IMyProtocol&gt; { }
+/// </code>
+/// </remarks>
+public abstract class SerializerV2<TProtocol> : SerializerV2
+{
+}
