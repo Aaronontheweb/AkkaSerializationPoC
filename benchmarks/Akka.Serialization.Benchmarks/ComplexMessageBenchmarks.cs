@@ -162,6 +162,13 @@ public class ComplexMessageBenchmarks
     {
         return _msgPackSerializer.ToBinary(_message);
     }
+    
+    [Benchmark]
+    public ArrayBufferWriter<byte> MsgPackSerializer_Serialize_BufferWriter()
+    {
+        MessagePackSerializer.Serialize(_buffer, _message, _msgPackSerializer.SerializerOptions);
+        return _buffer;
+    }
 
     [Benchmark]
     public ArrayBufferWriter<byte> V2_Serialize()
