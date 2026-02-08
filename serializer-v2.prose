@@ -1,0 +1,701 @@
+# Akka.NET SerializerV2 PoC
+#
+# Builds a codec-based serialization system for Akka.NET from scratch.
+# Phases: core abstractions → MessagePack codec → flat messages + tests →
+# envelopes + nesting → backwards compat → benchmarks → source generation.
+#
+# Commits after every meaningful milestone. Tests run after each phase.
+
+# ============================================================================
+# Agents
+# ============================================================================
+
+agent captain:
+  model: sonnet
+  persist: project
+  prompt: """
+You are the tech lead coordinating the SerializerV2 PoC build.
+
+You work in /home/aaronontheweb/repositories/pocs/AkkaSerializationPoC.
+
+Your responsibilities:
+- Break phases into implementable tasks
+- Review all work before committing
+- Maintain architectural consistency with docs/ARCHITECTURE.md
+- Keep the build moving forward and compiling cleanly
+- Commit frequently using the /commit skill
+
+Key rules:
+- Target net9.0, use central package management
+- Never use --no-build when running tests
+- Every commit must build cleanly (dotnet build SampleSln.slnx)
+- Tests must pass before moving to next phase
+- Read CLAUDE.md and docs/ARCHITECTURE.md for full design context
+"""
+
+agent implementer:
+  model: sonnet
+  prompt: """
+You are a senior .NET developer implementing the SerializerV2 system.
+
+You work in /home/aaronontheweb/repositories/pocs/AkkaSerializationPoC.
+
+Key context:
+- Read CLAUDE.md for project overview
+- Read docs/ARCHITECTURE.md for detailed codec design
+- Read docs/PHASES.md for phase breakdown
+
+You write clean, idiomatic C# 12+ code:
+- Records for immutable types
+- Pattern matching for dispatch
+- IBufferWriter<byte> for zero-copy buffer management
+- MessagePack-CSharp for wire format
+- Nullable reference types enabled, warnings as errors
+
+Follow existing project patterns. Match the interface designs in ARCHITECTURE.md exactly.
+When implementing, always read the relevant files first to understand existing code.
+Commit frequently using the /commit skill after each meaningful unit of work compiles.
+"""
+
+agent tester:
+  model: sonnet
+  prompt: """
+You are a QA engineer writing tests for the SerializerV2 system.
+
+You work in /home/aaronontheweb/repositories/pocs/AkkaSerializationPoC.
+
+Context: Read docs/PHASES.md for the test matrix per phase.
+
+You write xUnit tests with FluentAssertions:
+- Clear test names that document behavior (Should_X_When_Y pattern)
+- Round-trip serialization tests
+- Version tolerance tests
+- Edge case tests (nulls, empty strings, min/max values)
+
+Run tests with: dotnet test tests/Akka.Serialization.V2.Tests/
+Never use --no-build when running tests.
+"""
+
+agent reviewer:
+  model: opus
+  prompt: """
+You are an expert architect reviewing the SerializerV2 implementation.
+
+You work in /home/aaronontheweb/repositories/pocs/AkkaSerializationPoC.
+
+You review code for:
+- Correctness: does it match the design in docs/ARCHITECTURE.md?
+- Performance: are we avoiding unnecessary allocations? Is the zero-copy pattern correct?
+- API design: are the interfaces clean and extensible?
+- Edge cases: nullable handling, empty collections, version tolerance
+
+When you find issues, provide specific file paths, line numbers, and fixes.
+Read CLAUDE.md and docs/ARCHITECTURE.md for full context.
+"""
+
+agent benchmarker:
+  model: sonnet
+  prompt: """
+You are a performance engineer creating BenchmarkDotNet benchmarks.
+
+You work in /home/aaronontheweb/repositories/pocs/AkkaSerializationPoC.
+
+You create benchmarks comparing:
+- Legacy byte[]-based serialization (hand-rolled baseline producing byte-identical output)
+- V2 IBufferWriter-based serialization
+
+Use [MemoryDiagnoser] on all benchmark classes.
+Use [SimpleJob(RuntimeMoniker.Net90)] for consistent results.
+Run with: dotnet run -c Release --project benchmarks/Akka.Serialization.Benchmarks/
+"""
+
+# ============================================================================
+# Reusable blocks
+# ============================================================================
+
+block build-and-verify():
+  session "Build and verify compilation"
+    prompt: """
+Run `dotnet build SampleSln.slnx` and verify it compiles with zero errors and zero warnings.
+If there are errors, fix them. If there are warnings, fix them (TreatWarningsAsErrors is enabled).
+Report the build result.
+"""
+
+block run-tests():
+  session "Run test suite"
+    prompt: """
+Run `dotnet test tests/Akka.Serialization.V2.Tests/` and report results.
+Never use --no-build.
+If any tests fail, report which ones and why.
+"""
+
+block commit-milestone(description):
+  session "Commit milestone"
+    prompt: """
+Create a git commit for this milestone using the /commit skill.
+
+Milestone: {description}
+
+1. Run `git status` to see changes
+2. Run `git diff` to review changes
+3. Stage relevant files (prefer specific files over `git add -A`)
+4. Commit with a descriptive message
+5. Verify with `git status` after commit
+"""
+
+# ============================================================================
+# Phase 1: Core Abstractions
+# ============================================================================
+
+session: captain
+  prompt: """
+Starting SerializerV2 PoC. Read CLAUDE.md and docs/ARCHITECTURE.md to understand the full design.
+Plan the implementation tasks for Phase 1: Core abstractions.
+"""
+
+# Step 1.1: Core interfaces
+let core_interfaces = session: implementer
+  prompt: """
+Implement the core interfaces in src/Akka.Serialization.V2/.
+Delete the Placeholder.cs file first.
+
+Create these files following docs/ARCHITECTURE.md exactly:
+
+1. ICodecWriter.cs - Write-side abstraction with BeginObject, WriteInt32, WriteInt64,
+   WriteString, WriteBool, WriteDouble, WriteDateTime, WriteDateTimeOffset, WriteGuid,
+   WriteBytes, WriteNull, Flush
+
+2. ICodecReader.cs - Read-side abstraction with BeginReadObject, ReadInt32, ReadInt64,
+   ReadString, ReadBool, ReadDouble, ReadDateTime, ReadDateTimeOffset, ReadGuid, ReadBytes,
+   TryReadNull, SkipField, Consumed
+
+3. ICodecProvider.cs - Factory: CreateWriter(IBufferWriter<byte>) and CreateReader(ReadOnlyMemory<byte>)
+
+4. SerializerV2.cs - Abstract base class: Identifier, Manifest, Write, Read, SizeHint
+
+5. SerializerRegistry.cs - Type-to-serializer routing: Register, GetById, FindFor
+
+6. SerializerV2Adapter.cs - Wraps legacy Serializer/SerializerWithStringManifest for backwards compat
+
+Build after each file to catch issues early. Commit when all interfaces compile.
+"""
+
+do build-and-verify()
+do commit-milestone("Implement core SerializerV2 abstractions")
+
+# Step 1.2: MessagePack codec
+let msgpack_codec = session: implementer
+  prompt: """
+Implement the MessagePack codec provider in src/Akka.Serialization.MessagePack/.
+Delete the Placeholder.cs file first.
+
+Create these files:
+
+1. MessagePackCodecProvider.cs - Implements ICodecProvider, creates writer/reader instances
+
+2. MessagePackCodecWriter.cs - Implements ICodecWriter using MessagePackWriter ref struct.
+   Creates a new MessagePackWriter per operation (it's lightweight), writes to shared
+   IBufferWriter<byte>, flushes after each write. Uses array format for BeginObject.
+
+   Key design: DateTime serialized as ticks (long) + Kind (int).
+   DateTimeOffset as ticks (long) + offset minutes (int).
+   Guid as 16-byte binary.
+
+3. MessagePackCodecReader.cs - Implements ICodecReader. Stores ReadOnlyMemory<byte> and
+   consumed offset. Creates MessagePackReader per operation from _buffer[_consumed..],
+   advances _consumed by reader.Consumed.
+
+Build and verify. Then commit.
+"""
+  context: core_interfaces
+
+do build-and-verify()
+do commit-milestone("Implement MessagePack codec provider")
+
+# ============================================================================
+# Phase 1 continued: Flat Messages + Tests
+# ============================================================================
+
+# Step 1.3: Sample messages and hand-written serializers
+let flat_serializers = session: implementer
+  prompt: """
+Create sample message types and hand-written serializers.
+Delete tests/Akka.Serialization.V2.Tests/Placeholder.cs first.
+
+In a new file tests/Akka.Serialization.V2.Tests/Messages/ directory:
+
+1. SampleMessages.cs:
+   - UserCreated(string UserId, string Email, DateTime CreatedAt) sealed record
+   - UserUpdated(string UserId, string? NewEmail, string? NewName, DateTime UpdatedAt) sealed record
+   - OrderPlaced(Guid OrderId, string CustomerId, decimal Amount, DateTimeOffset PlacedAt) sealed record
+
+2. UserMessageSerializer.cs - Hand-written SerializerV2 for UserCreated and UserUpdated:
+   - SerializerId = 5001
+   - Manifest routing: "user-created-v1", "user-updated-v1"
+   - Write: BeginObject(N), write each field in order
+   - Read: BeginReadObject, read fields, SkipField loop for unknown trailing fields
+
+3. OrderMessageSerializer.cs - Hand-written SerializerV2 for OrderPlaced:
+   - SerializerId = 5002
+   - Manifest: "order-placed-v1"
+   - Handle decimal as double for now (simplicity)
+
+Build and verify compilation.
+"""
+  context: { core_interfaces, msgpack_codec }
+
+do build-and-verify()
+
+# Step 1.4: Flat message tests
+let flat_tests = session: tester
+  prompt: """
+Write xUnit tests for the flat message serializers.
+
+Create tests/Akka.Serialization.V2.Tests/FlatMessageTests.cs:
+
+Test cases:
+1. UserCreated_RoundTrip - serialize then deserialize, assert all fields equal
+2. UserUpdated_RoundTrip_AllFields - all fields populated
+3. UserUpdated_RoundTrip_WithNulls - NewEmail and NewName are null
+4. OrderPlaced_RoundTrip - including Guid and DateTimeOffset
+5. VersionTolerance_SkipUnknownFields - serialize with 4 fields using codec directly,
+   deserialize with a serializer expecting 3 fields (should skip the extra)
+6. ForwardCompat_MissingFields - serialize with 2 fields, deserialize with serializer
+   expecting 3 (should handle gracefully with defaults)
+
+Use MessagePackCodecProvider for all tests.
+Use FluentAssertions for assertions.
+Run the tests after writing them.
+"""
+  context: flat_serializers
+
+do run-tests()
+
+loop until **all flat message tests pass** (max: 5):
+  session: implementer
+    prompt: """
+Fix the failing tests. Read the test output carefully.
+Either fix the implementation or fix the test if it has a bug.
+Run tests again after fixing.
+"""
+    context: flat_tests
+
+do commit-milestone("Add flat message serializers and tests (Phase 1 complete)")
+
+# Phase 1 review by opus
+let phase1_review = session: reviewer
+  prompt: """
+Review the Phase 1 implementation:
+
+1. Read all files in src/Akka.Serialization.V2/ and src/Akka.Serialization.MessagePack/
+2. Verify the ICodecWriter/ICodecReader interfaces match docs/ARCHITECTURE.md
+3. Check MessagePackCodecWriter for correctness — does it handle the per-operation
+   MessagePackWriter pattern correctly? Does Flush work right?
+4. Check MessagePackCodecReader — does consumed offset tracking work?
+5. Review the hand-written serializers — are they correct reference implementations?
+6. Flag any issues that need fixing before proceeding to Phase 2
+
+Be specific: file paths, line numbers, what's wrong, how to fix it.
+"""
+
+if **phase 1 review found issues**:
+  session: implementer
+    prompt: "Fix the issues identified in the Phase 1 review."
+    context: phase1_review
+  do build-and-verify()
+  do run-tests()
+  do commit-milestone("Fix Phase 1 review issues")
+
+# ============================================================================
+# Phase 2: Envelopes + Nested Composition
+# ============================================================================
+
+resume: captain
+  prompt: "Phase 1 complete and reviewed. Starting Phase 2: Envelopes and nested composition."
+
+# Step 2.1: Envelope messages and serializers
+let envelope_impl = session: implementer
+  prompt: """
+Implement envelope messages and serializers demonstrating zero-copy nesting.
+
+Create in tests/Akka.Serialization.V2.Tests/Messages/:
+
+1. EnvelopeMessages.cs:
+   - RemoteEnvelope(string RecipientPath, string SenderPath, object Message) sealed record
+   - DDataEnvelope(string Key, long Version, object Data) sealed record
+
+2. RemoteEnvelopeSerializer.cs:
+   - SerializerId = 9999, Manifest = "remote-envelope-v1"
+   - Takes SerializerRegistry in constructor
+   - Write: BeginObject(4), write recipientPath, senderPath, then look up inner
+     message's serializer, write its Identifier (int) and Manifest (string),
+     then call innerSerializer.Write(writer, message) — SAME writer instance!
+   - Read: BeginReadObject, read envelope fields, read innerSerializerId and
+     innerManifest, look up serializer, call innerSerializer.Read(reader, manifest)
+
+3. DDataEnvelopeSerializer.cs:
+   - SerializerId = 9998, Manifest = "ddata-envelope-v1"
+   - Same nested pattern as RemoteEnvelopeSerializer
+
+Build and verify.
+"""
+  context: { core_interfaces, flat_serializers }
+
+do build-and-verify()
+
+# Step 2.2: Envelope tests
+let envelope_tests = session: tester
+  prompt: """
+Write tests for envelope serializers.
+
+Create tests/Akka.Serialization.V2.Tests/EnvelopeTests.cs:
+
+1. RemoteEnvelope_RoundTrip - wrap UserCreated in RemoteEnvelope, round-trip
+2. DDataEnvelope_RoundTrip - wrap UserCreated in DDataEnvelope, round-trip
+3. DoubleNested_RoundTrip - RemoteEnvelope wrapping DDataEnvelope wrapping UserCreated
+4. TripleNested_RoundTrip - if applicable (add a TracingEnvelope or similar)
+5. SingleBuffer_Verification - serialize a nested envelope, verify the ArrayBufferWriter
+   was written to only once (check WrittenCount > 0 before and that it's one contiguous block)
+6. MixedRegistry_V1AndV2 - register both flat and envelope serializers, verify routing
+
+Setup: Create a helper method that builds a SerializerRegistry with all serializers
+registered. Use MessagePackCodecProvider.
+
+Run the tests.
+"""
+  context: envelope_impl
+
+do run-tests()
+
+loop until **all envelope tests pass** (max: 5):
+  session: implementer
+    prompt: """
+Fix failing envelope tests. The most common issue will be with the nested
+serialization pattern — make sure the inner serializer writes its own
+BeginObject header as a nested MessagePack array within the parent's array.
+"""
+    context: envelope_tests
+
+do commit-milestone("Add envelope serializers with zero-copy nesting (Phase 2)")
+
+# Step 2.3: Backwards compatibility (opus — nuanced legacy integration)
+let compat_impl = session: implementer
+  model: opus
+  prompt: """
+Implement backwards compatibility tests using SerializerV2Adapter.
+
+Create tests/Akka.Serialization.V2.Tests/BackwardsCompatTests.cs:
+
+1. Create a simple legacy serializer that extends Akka's SerializerWithStringManifest:
+   - LegacyUserSerializer that serializes UserCreated using System.Text.Json to byte[]
+   - Has its own SerializerId (e.g., 1001) and manifest
+
+2. Wrap it in SerializerV2Adapter
+
+3. Tests:
+   - LegacyAdapter_RoundTrip - serialize/deserialize through adapter
+   - LegacyAdapter_InEnvelope - put legacy-serialized message inside V2 RemoteEnvelope
+   - MixedRegistry - V2 serializers and adapted legacy serializers coexist
+
+Run tests after implementation.
+"""
+  context: { envelope_impl, core_interfaces }
+
+do run-tests()
+
+loop until **all backwards compat tests pass** (max: 5):
+  session: implementer
+    prompt: "Fix failing backwards compat tests."
+    context: compat_impl
+
+do commit-milestone("Add backwards compatibility with legacy serializers")
+
+# Phase 2 review by opus — this is the critical architecture validation
+let phase2_review = session: reviewer
+  prompt: """
+Review the Phase 2 implementation — this is the most architecturally important review.
+
+1. Read the envelope serializers and verify the zero-copy nesting pattern is correct
+2. Verify the inner serializer's BeginObject creates a proper nested MessagePack array
+3. Verify the reader correctly deserializes nested structures
+4. Review SerializerV2Adapter — does it correctly bridge legacy byte[] serializers?
+5. Check the SerializerRegistry integration — does type routing work correctly?
+6. Check for any allocation leaks (intermediate byte[] where there shouldn't be)
+
+This pattern is the key innovation. Be thorough.
+"""
+
+if **phase 2 review found issues**:
+  session: implementer
+    model: opus
+    prompt: "Fix the issues identified in the Phase 2 review. These are critical architecture issues."
+    context: phase2_review
+  do build-and-verify()
+  do run-tests()
+  do commit-milestone("Fix Phase 2 review issues")
+
+# ============================================================================
+# Phase 3: Benchmarks
+# ============================================================================
+
+resume: captain
+  prompt: "Phase 2 complete and reviewed. Starting Phase 3: Benchmarks with baseline comparison."
+
+let benchmarks = session: benchmarker
+  prompt: """
+Implement benchmarks comparing V2 vs legacy-style serialization.
+
+In benchmarks/Akka.Serialization.Benchmarks/:
+
+1. Replace Program.cs with BenchmarkDotNet runner:
+   BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+
+2. Create FlatMessageBenchmarks.cs:
+   - Legacy_Serialize: Use MessagePack directly via MemoryStream → ToArray() → byte[]
+   - V2_Serialize: Use SerializerV2 → ArrayBufferWriter<byte>
+   - Legacy_Deserialize: MessagePack from byte[]
+   - V2_Deserialize: SerializerV2 from ReadOnlyMemory<byte>
+   - Both must produce byte-for-byte IDENTICAL MessagePack output
+   - [MemoryDiagnoser] on the class
+
+3. Create NestedEnvelopeBenchmarks.cs:
+   - Legacy_1Layer: serialize inner → byte[] → embed as binary in outer → byte[]
+   - V2_1Layer: single buffer, both layers write directly
+   - Legacy_3Layer: triple allocation (Remote → DData → user message)
+   - V2_3Layer: single buffer for all 3 layers
+   - [MemoryDiagnoser] on the class
+
+Important: The legacy baseline must use MessagePack too (not a different format),
+so we're comparing the mechanical overhead of byte[] vs IBufferWriter, not different
+wire formats.
+
+Build and verify compilation (don't run benchmarks yet, just make sure they compile).
+"""
+  context: { flat_serializers, envelope_impl }
+
+do build-and-verify()
+do commit-milestone("Add benchmark scaffolding")
+
+# Run benchmarks
+let benchmark_results = session "Run benchmarks"
+  prompt: """
+Run the benchmarks in Release mode:
+dotnet run -c Release --project benchmarks/Akka.Serialization.Benchmarks/ -- --filter *
+
+This will take a few minutes. Capture the full output including the allocation tables.
+Report the results, focusing on:
+- Allocation differences (Gen0/Gen1, Allocated bytes)
+- Throughput differences (Mean time per operation)
+- The ratio between V2 and Legacy for nested envelopes
+"""
+
+do commit-milestone("Phase 3 complete: benchmark results captured")
+
+# ============================================================================
+# Phase 4: Source Generation Design
+# ============================================================================
+
+resume: captain
+  prompt: """
+Phase 3 benchmarks complete. Starting Phase 4: Source generation design.
+
+Review benchmark results and plan the source generator approach.
+"""
+  context: benchmark_results
+
+# Step 4.1: Define attributes
+let attributes = session: implementer
+  prompt: """
+Implement the source generation attributes in src/Akka.Serialization.V2/.
+
+Create Attributes.cs with:
+
+1. [AkkaSerializerModule(SerializerId = N)] - marks a partial class as a serializer module
+   - int SerializerId property
+
+2. [AkkaSerializable(Manifest = "...")] - marks a type for serialization
+   - string Manifest property
+
+3. [AkkaField(N)] - marks a property with its field index
+   - int Index property
+
+These are the annotations users will put on their types. The source generator
+(Phase 5) will read these and generate SerializerV2 implementations.
+
+Also create an annotated version of the sample messages to show what user code looks like:
+
+tests/Akka.Serialization.V2.Tests/Messages/AnnotatedMessages.cs:
+- UserCreatedAnnotated with [AkkaSerializable] and [AkkaField] on each property
+- etc.
+
+Build and verify.
+"""
+
+do build-and-verify()
+do commit-milestone("Add source generation attributes (Phase 4)")
+
+# Step 4.2: Reference generated code (hand-written)
+let reference_generated = session: implementer
+  prompt: """
+Write the 'reference generated code' — this is what the source generator WILL produce,
+but written by hand first as a specification.
+
+Create tests/Akka.Serialization.V2.Tests/Generated/ReferenceGeneratedSerializer.cs:
+
+This should be a SerializerV2 subclass that:
+1. Reads the [AkkaSerializerModule] attribute for SerializerId
+2. Has a Manifest() method that maps each [AkkaSerializable] type to its manifest string
+3. Has Write/Read methods that use [AkkaField] indices for field ordering
+4. Generates SkipField loops for version tolerance
+
+Create tests that verify the reference generated serializer produces
+IDENTICAL byte output to the hand-written serializers from Phase 1.
+
+Run tests to verify byte-identical output.
+"""
+  context: { attributes, flat_serializers }
+
+do run-tests()
+
+loop until **reference generated serializer tests pass** (max: 5):
+  session: implementer
+    prompt: "Fix reference generated serializer to produce byte-identical output."
+    context: reference_generated
+
+do commit-milestone("Add reference generated serializer (Phase 4 complete)")
+
+# ============================================================================
+# Phase 5: Source Generator Implementation
+# ============================================================================
+
+resume: captain
+  prompt: """
+Phase 4 complete. Starting Phase 5: Roslyn incremental source generator.
+
+The reference generated code is our specification. Now build a generator that
+produces equivalent code automatically.
+"""
+
+# Step 5.1: Create generator project
+let generator_scaffold = session: implementer
+  prompt: """
+Create the source generator project.
+
+1. Create src/Akka.Serialization.Generators/Akka.Serialization.Generators.csproj:
+   - Target netstandard2.0 (required for source generators)
+   - Reference Microsoft.CodeAnalysis.CSharp
+   - EnforceExtendedAnalyzerRules = true
+   - IsRoslynComponent = true
+
+2. Update SampleSln.slnx to include the new project
+
+3. Update Directory.Packages.props with Microsoft.CodeAnalysis.CSharp version
+
+4. Add the generator as an analyzer reference in Akka.Serialization.V2.Tests.csproj:
+   <ProjectReference Include="..\..\src\Akka.Serialization.Generators\Akka.Serialization.Generators.csproj"
+     OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+
+5. Create a basic AkkaSerializerGenerator.cs implementing IIncrementalGenerator
+   with Initialize method that finds [AkkaSerializable] types.
+
+Build to verify the scaffold works.
+"""
+
+do build-and-verify()
+do commit-milestone("Add source generator project scaffold")
+
+# Step 5.2: Implement the generator (opus — this is genuinely hard Roslyn work)
+let generator_impl = session: implementer
+  model: opus
+  prompt: """
+Implement the Roslyn incremental source generator.
+
+In src/Akka.Serialization.Generators/AkkaSerializerGenerator.cs:
+
+The generator should:
+
+1. Find all types with [AkkaSerializable] attribute
+2. For each type:
+   - Extract manifest string from attribute
+   - Find properties with [AkkaField(N)] attributes
+   - Sort by field index
+   - Generate a Write method that calls BeginObject(fieldCount) then writes each field
+   - Generate a Read method that calls BeginReadObject then reads each field + SkipField loop
+
+3. Find all types with [AkkaSerializerModule] attribute (partial classes)
+4. For each module:
+   - Find all [AkkaSerializable] types in the same assembly
+   - Generate the SerializerV2 subclass on the partial class
+   - Generate Identifier property from SerializerId
+   - Generate Manifest() switch for all types
+   - Generate Read() dispatch on manifest string
+
+Use Roslyn's incremental generator pipeline:
+- ForAttributeWithMetadataName for finding attributed types
+- RegisterSourceOutput for emitting generated code
+
+Match the reference generated code from Phase 4 exactly.
+Build and verify.
+"""
+  context: { attributes, reference_generated }
+
+do build-and-verify()
+
+# Step 5.3: Test generated serializers
+let generated_tests = session: tester
+  prompt: """
+Create tests verifying the source-generated serializers work identically to hand-written ones.
+
+Create tests/Akka.Serialization.V2.Tests/GeneratedSerializerTests.cs:
+
+1. Define an [AkkaSerializerModule(SerializerId = 6001)] partial class
+2. Use the annotated message types with [AkkaSerializable] and [AkkaField]
+3. The source generator should produce a working SerializerV2 implementation
+
+Tests:
+1. Generated_UserCreated_RoundTrip - same as hand-written test
+2. Generated_UserUpdated_RoundTrip - same as hand-written test
+3. Generated_ByteIdentical_ToHandWritten - serialize same message with both,
+   compare byte output
+4. Generated_InEnvelope - use generated serializer inside a RemoteEnvelope
+5. Generated_VersionTolerance - skip unknown fields
+
+Run tests.
+"""
+  context: { generator_impl, flat_tests }
+
+do run-tests()
+
+loop until **all generated serializer tests pass** (max: 10):
+  session: implementer
+    prompt: """
+Fix the source generator or tests. Common issues:
+- Generator not finding attributes (check assembly references)
+- Generated code doesn't match expected format
+- Field ordering wrong
+- Missing using statements in generated code
+
+Read the generated source output if available (check obj/Generated/ directory).
+"""
+    context: generated_tests
+
+do commit-milestone("Source generator passing all tests (Phase 5 complete)")
+
+# ============================================================================
+# Final
+# ============================================================================
+
+output summary = resume: captain
+  prompt: """
+SerializerV2 PoC complete!
+
+Generate a final summary:
+1. What was built (list all components)
+2. Test results (how many tests, all passing?)
+3. Benchmark highlights (V2 vs legacy for nested envelopes)
+4. Source generator status
+5. Known limitations and next steps for integrating into Akka.NET core
+6. Commit count and overall structure
+
+This PoC is ready for review.
+"""
