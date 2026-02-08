@@ -4,15 +4,19 @@ using Akka.Serialization.MessagePack;
 using Akka.Serialization.V2.Tests.Messages;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Jobs;
+using MessagePack;
 
 namespace Akka.Serialization.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing the default Akka.NET serializer (Newtonsoft.Json) vs V2 MessagePack
-/// for flat messages (no nesting).
+/// Benchmarks comparing three serialization approaches for flat messages (no nesting):
 ///
-/// This represents the real migration path: users moving from the default Newtonsoft.Json
-/// serializer to the new V2 codec-based system.
+/// 1. Newtonsoft.Json (Akka.NET default) — what most users have today
+/// 2. V1 MessagePack (ToBinary() -> byte[]) — same wire format as V2, but legacy API shape
+/// 3. V2 MessagePack (ICodecWriter on shared buffer) — new API
+///
+/// Comparing V2 vs Newtonsoft.Json shows the full migration benefit.
+/// Comparing V2 vs V1 MessagePack isolates the API shape improvement (IBufferWriter vs byte[]).
 /// </summary>
 [MemoryDiagnoser]
 [SimpleJob(RuntimeMoniker.Net90)]
@@ -26,7 +30,10 @@ public class FlatMessageBenchmarks
     private ActorSystem _actorSystem = null!;
     private Akka.Serialization.Serializer _newtonsoftSerializer = null!;
     private byte[] _newtonsoftBytes = null!;
-    private string _newtonsoftManifest = null!;
+
+    // V1-style MessagePack (ToBinary() -> byte[] pattern)
+    private V1MessagePackUserSerializer _v1Serializer = null!;
+    private byte[] _v1Bytes = null!;
 
     // V2 pre-serialized
     private byte[] _v2Bytes = null!;
@@ -43,18 +50,17 @@ public class FlatMessageBenchmarks
         _v2Serializer = new UserMessageSerializer();
         _buffer = new ArrayBufferWriter<byte>(256);
 
-        // Legacy setup - get Akka.NET's built-in Newtonsoft.Json serializer
+        // V1 MessagePack setup (same wire format, legacy API shape)
+        _v1Serializer = new V1MessagePackUserSerializer();
+
+        // Legacy Newtonsoft.Json setup
         _actorSystem = ActorSystem.Create("benchmark-system");
         _newtonsoftSerializer = ((ExtendedActorSystem)_actorSystem).Serialization
             .FindSerializerForType(typeof(UserCreated));
 
         // Pre-serialize for deserialization benchmarks
         _newtonsoftBytes = _newtonsoftSerializer.ToBinary(_message);
-
-        if (_newtonsoftSerializer is Akka.Serialization.SerializerWithStringManifest sm)
-            _newtonsoftManifest = sm.Manifest(_message);
-        else
-            _newtonsoftManifest = _message.GetType().FullName!;
+        _v1Bytes = _v1Serializer.ToBinary(_message);
 
         var v2Buffer = new ArrayBufferWriter<byte>(256);
         var writer = MessagePackCodecProvider.Instance.CreateWriter(v2Buffer);
@@ -74,6 +80,10 @@ public class FlatMessageBenchmarks
         _buffer.Clear();
     }
 
+    // =====================================================================
+    // Serialization
+    // =====================================================================
+
     /// <summary>
     /// Default Akka.NET serialization: Newtonsoft.Json ToBinary() -> byte[].
     /// This is what most Akka.NET users have today.
@@ -82,6 +92,16 @@ public class FlatMessageBenchmarks
     public byte[] NewtonsoftJson_Serialize()
     {
         return _newtonsoftSerializer.ToBinary(_message);
+    }
+
+    /// <summary>
+    /// V1-style MessagePack: same wire format as V2, but using legacy ToBinary() -> byte[] API.
+    /// Isolates the wire format improvement from the API shape improvement.
+    /// </summary>
+    [Benchmark]
+    public byte[] V1MessagePack_Serialize()
+    {
+        return _v1Serializer.ToBinary(_message);
     }
 
     /// <summary>
@@ -95,6 +115,10 @@ public class FlatMessageBenchmarks
         return _buffer;
     }
 
+    // =====================================================================
+    // Deserialization
+    // =====================================================================
+
     /// <summary>
     /// Default Akka.NET deserialization: Newtonsoft.Json FromBinary() from byte[].
     /// </summary>
@@ -105,6 +129,15 @@ public class FlatMessageBenchmarks
     }
 
     /// <summary>
+    /// V1-style MessagePack deserialization from byte[].
+    /// </summary>
+    [Benchmark]
+    public UserCreated V1MessagePack_Deserialize()
+    {
+        return _v1Serializer.FromBinary(_v1Bytes);
+    }
+
+    /// <summary>
     /// V2 MessagePack deserialization from pre-serialized bytes.
     /// </summary>
     [Benchmark]
@@ -112,5 +145,35 @@ public class FlatMessageBenchmarks
     {
         var reader = MessagePackCodecProvider.Instance.CreateReader(_v2Bytes);
         return (UserCreated)_v2Serializer.Read(reader, "user-created-v1");
+    }
+}
+
+/// <summary>
+/// V1-style serializer using MessagePack but returning byte[] (legacy ToBinary() API shape).
+/// Produces the same wire format as the V2 serializer — same MessagePack array layout.
+/// This lets us isolate the API overhead (byte[] alloc + copy) from the wire format choice.
+/// </summary>
+internal sealed class V1MessagePackUserSerializer
+{
+    public byte[] ToBinary(UserCreated msg)
+    {
+        var buffer = new ArrayBufferWriter<byte>(128);
+        var mpWriter = new MessagePackWriter(buffer);
+        mpWriter.WriteArrayHeader(3);
+        mpWriter.Write(msg.UserId);
+        mpWriter.Write(msg.Email);
+        mpWriter.Write(msg.CreatedAt.ToBinary());
+        mpWriter.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    public UserCreated FromBinary(byte[] bytes)
+    {
+        var reader = new MessagePackReader(bytes);
+        reader.ReadArrayHeader();
+        var userId = reader.ReadString()!;
+        var email = reader.ReadString()!;
+        var createdAt = DateTime.FromBinary(reader.ReadInt64());
+        return new UserCreated(userId, email, createdAt);
     }
 }

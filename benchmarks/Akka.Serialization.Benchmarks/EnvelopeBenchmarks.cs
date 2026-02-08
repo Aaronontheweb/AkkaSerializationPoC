@@ -5,20 +5,19 @@ using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Jobs;
+using MessagePack;
 
 namespace Akka.Serialization.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing the legacy Newtonsoft.Json multi-layer serialization pattern
-/// vs V2 single-buffer zero-copy pattern for envelope messages.
+/// Benchmarks comparing three envelope serialization approaches:
 ///
-/// Legacy pattern (what real Akka.NET users have today):
-///   Inner message -> Newtonsoft.Json ToBinary() -> byte[]
-///   Outer envelope embeds byte[] as binary blob -> ToBinary() -> byte[]
-///   Each layer allocates a new byte[]
+/// 1. Newtonsoft.Json (Akka.NET default) — inner message via ToBinary() -> byte[], embedded as blob
+/// 2. V1 MessagePack (ToBinary() -> byte[]) — same wire format as V2, but each layer allocates byte[]
+/// 3. V2 MessagePack (ICodecWriter on shared buffer) — single buffer, zero-copy nesting
 ///
-/// V2 pattern:
-///   Single IBufferWriter shared across all layers -> zero intermediate allocations
+/// V2 vs Newtonsoft.Json shows the full migration benefit (format + API).
+/// V2 vs V1 MessagePack isolates the zero-copy nesting improvement (API shape only).
 /// </summary>
 [MemoryDiagnoser]
 [SimpleJob(RuntimeMoniker.Net90)]
@@ -39,9 +38,14 @@ public class EnvelopeBenchmarks
     private ActorSystem _actorSystem = null!;
     private Akka.Serialization.Serializer _newtonsoftSerializer = null!;
 
+    // V1 MessagePack infrastructure (ToBinary() -> byte[] pattern)
+    private V1MessagePackEnvelopeSerializer _v1Serializer = null!;
+
     // Pre-serialized data for deserialization benchmarks
     private byte[] _v2OneLayerBytes = null!;
     private byte[] _v2ThreeLayerBytes = null!;
+    private byte[] _v1OneLayerBytes = null!;
+    private byte[] _v1ThreeLayerBytes = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -61,10 +65,13 @@ public class EnvelopeBenchmarks
         _registry.Register(_remoteSerializer, typeof(RemoteEnvelope));
         _registry.Register(_ddataSerializer, typeof(DDataEnvelope));
 
-        // Legacy setup
+        // Legacy Newtonsoft.Json setup
         _actorSystem = ActorSystem.Create("envelope-benchmark-system");
         _newtonsoftSerializer = ((ExtendedActorSystem)_actorSystem).Serialization
             .FindSerializerForType(typeof(UserCreated));
+
+        // V1 MessagePack setup
+        _v1Serializer = new V1MessagePackEnvelopeSerializer();
 
         // One-layer envelope: Remote -> UserCreated
         _oneLayerEnvelope = new RemoteEnvelope(
@@ -100,6 +107,11 @@ public class EnvelopeBenchmarks
         writer = MessagePackCodecProvider.Instance.CreateWriter(tempBuffer);
         _remoteSerializer.Write(writer, _threeLayerEnvelope);
         _v2ThreeLayerBytes = tempBuffer.WrittenSpan.ToArray();
+
+        // Pre-serialize V1 data for deserialization benchmarks
+        _v1OneLayerBytes = _v1Serializer.SerializeOneLayer(_oneLayerEnvelope, _innerMessage);
+        _v1ThreeLayerBytes = _v1Serializer.SerializeThreeLayer(
+            _threeLayerEnvelope, ddataEnvelope, innerRemote, _innerMessage);
     }
 
     [GlobalCleanup]
@@ -122,15 +134,12 @@ public class EnvelopeBenchmarks
     /// Legacy Newtonsoft.Json pattern: 1-layer envelope.
     /// Serialize inner via Newtonsoft.Json ToBinary() -> byte[],
     /// then embed as binary blob in outer envelope -> byte[].
-    /// Two allocations: inner byte[] + outer byte[].
     /// </summary>
     [Benchmark(Baseline = true)]
     public byte[] NewtonsoftJson_1Layer_Serialize()
     {
-        // Step 1: Serialize inner UserCreated to byte[] via Newtonsoft.Json
         var innerBytes = _newtonsoftSerializer.ToBinary(_innerMessage);
 
-        // Step 2: Serialize outer envelope embedding innerBytes as binary blob
         _buffer.Clear();
         var outerWriter = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
         outerWriter.BeginObject(5);
@@ -141,6 +150,16 @@ public class EnvelopeBenchmarks
         outerWriter.WriteBytes(innerBytes);
 
         return _buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    /// V1-style MessagePack pattern: 1-layer envelope.
+    /// Same wire format as V2, but each layer serializes to byte[] then embeds.
+    /// </summary>
+    [Benchmark]
+    public byte[] V1MessagePack_1Layer_Serialize()
+    {
+        return _v1Serializer.SerializeOneLayer(_oneLayerEnvelope, _innerMessage);
     }
 
     /// <summary>
@@ -162,7 +181,6 @@ public class EnvelopeBenchmarks
     /// <summary>
     /// Legacy Newtonsoft.Json pattern: 3-layer envelope.
     /// Each layer serializes inner to byte[] via Newtonsoft.Json, wraps in next layer.
-    /// Multiple byte[] allocations per layer.
     /// </summary>
     [Benchmark]
     public byte[] NewtonsoftJson_3Layer_Serialize()
@@ -187,7 +205,7 @@ public class EnvelopeBenchmarks
         layer3Writer.BeginObject(5);
         layer3Writer.WriteString("replicated-key");
         layer3Writer.WriteInt64(42L);
-        layer3Writer.WriteInt32(_remoteSerializer.Identifier);
+        layer3Writer.WriteInt32(5001); // inner serializer id
         layer3Writer.WriteString("remote-envelope-v1");
         layer3Writer.WriteBytes(layer2Bytes);
         var layer3Bytes = layer3Buffer.WrittenSpan.ToArray();
@@ -198,11 +216,25 @@ public class EnvelopeBenchmarks
         outerWriter.BeginObject(5);
         outerWriter.WriteString(_threeLayerEnvelope.RecipientPath);
         outerWriter.WriteString(_threeLayerEnvelope.SenderPath);
-        outerWriter.WriteInt32(_ddataSerializer.Identifier);
+        outerWriter.WriteInt32(6001); // ddata serializer id
         outerWriter.WriteString("ddata-envelope-v1");
         outerWriter.WriteBytes(layer3Bytes);
 
         return _buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    /// V1-style MessagePack pattern: 3-layer envelope.
+    /// Same wire format as V2, but each layer allocates a byte[].
+    /// </summary>
+    [Benchmark]
+    public byte[] V1MessagePack_3Layer_Serialize()
+    {
+        return _v1Serializer.SerializeThreeLayer(
+            _threeLayerEnvelope,
+            (DDataEnvelope)_threeLayerEnvelope.Message,
+            (RemoteEnvelope)((DDataEnvelope)_threeLayerEnvelope.Message).Data,
+            _innerMessage);
     }
 
     /// <summary>
@@ -222,6 +254,15 @@ public class EnvelopeBenchmarks
     // =====================================================================
 
     /// <summary>
+    /// V1-style MessagePack deserialization: 1-layer envelope from byte[].
+    /// </summary>
+    [Benchmark]
+    public RemoteEnvelope V1MessagePack_1Layer_Deserialize()
+    {
+        return _v1Serializer.DeserializeOneLayer(_v1OneLayerBytes);
+    }
+
+    /// <summary>
     /// V2 deserialization: 1-layer envelope from pre-serialized bytes.
     /// </summary>
     [Benchmark]
@@ -232,6 +273,15 @@ public class EnvelopeBenchmarks
     }
 
     /// <summary>
+    /// V1-style MessagePack deserialization: 3-layer envelope from byte[].
+    /// </summary>
+    [Benchmark]
+    public RemoteEnvelope V1MessagePack_3Layer_Deserialize()
+    {
+        return _v1Serializer.DeserializeThreeLayer(_v1ThreeLayerBytes);
+    }
+
+    /// <summary>
     /// V2 deserialization: 3-layer envelope from pre-serialized bytes.
     /// </summary>
     [Benchmark]
@@ -239,5 +289,144 @@ public class EnvelopeBenchmarks
     {
         var reader = MessagePackCodecProvider.Instance.CreateReader(_v2ThreeLayerBytes);
         return (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
+    }
+}
+
+/// <summary>
+/// V1-style envelope serializer: uses MessagePack but follows the legacy ToBinary() -> byte[] pattern.
+/// Each layer serializes its inner content to byte[], then embeds it as a binary blob.
+/// This is what a "best possible" V1 serializer looks like — same wire format, but
+/// paying the byte[] allocation tax at every nesting layer.
+/// </summary>
+internal sealed class V1MessagePackEnvelopeSerializer
+{
+    public byte[] SerializeOneLayer(RemoteEnvelope envelope, UserCreated inner)
+    {
+        // Layer 1: inner message -> byte[]
+        var innerBytes = SerializeUserCreated(inner);
+
+        // Layer 2: envelope wrapping inner byte[]
+        var buffer = new ArrayBufferWriter<byte>(256);
+        var writer = new MessagePackWriter(buffer);
+        writer.WriteArrayHeader(5);
+        writer.Write(envelope.RecipientPath);
+        writer.Write(envelope.SenderPath);
+        writer.Write(5001); // serializer id
+        writer.Write("user-created-v1");
+        writer.Write(innerBytes);
+        writer.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    public byte[] SerializeThreeLayer(
+        RemoteEnvelope outer, DDataEnvelope ddata,
+        RemoteEnvelope innerRemote, UserCreated innerMsg)
+    {
+        // Layer 1: innermost message -> byte[]
+        var layer1 = SerializeUserCreated(innerMsg);
+
+        // Layer 2: inner RemoteEnvelope -> byte[]
+        var l2Buf = new ArrayBufferWriter<byte>(256);
+        var l2W = new MessagePackWriter(l2Buf);
+        l2W.WriteArrayHeader(5);
+        l2W.Write(innerRemote.RecipientPath);
+        l2W.Write(innerRemote.SenderPath);
+        l2W.Write(5001);
+        l2W.Write("user-created-v1");
+        l2W.Write(layer1);
+        l2W.Flush();
+        var layer2 = l2Buf.WrittenSpan.ToArray();
+
+        // Layer 3: DDataEnvelope -> byte[]
+        var l3Buf = new ArrayBufferWriter<byte>(512);
+        var l3W = new MessagePackWriter(l3Buf);
+        l3W.WriteArrayHeader(5);
+        l3W.Write(ddata.Key);
+        l3W.Write(ddata.Version);
+        l3W.Write(5002); // remote serializer id
+        l3W.Write("remote-envelope-v1");
+        l3W.Write(layer2);
+        l3W.Flush();
+        var layer3 = l3Buf.WrittenSpan.ToArray();
+
+        // Layer 4: outer RemoteEnvelope -> byte[]
+        var l4Buf = new ArrayBufferWriter<byte>(1024);
+        var l4W = new MessagePackWriter(l4Buf);
+        l4W.WriteArrayHeader(5);
+        l4W.Write(outer.RecipientPath);
+        l4W.Write(outer.SenderPath);
+        l4W.Write(6001); // ddata serializer id
+        l4W.Write("ddata-envelope-v1");
+        l4W.Write(layer3);
+        l4W.Flush();
+        return l4Buf.WrittenSpan.ToArray();
+    }
+
+    public RemoteEnvelope DeserializeOneLayer(byte[] bytes)
+    {
+        var reader = new MessagePackReader(bytes);
+        reader.ReadArrayHeader();
+        var recipientPath = reader.ReadString()!;
+        var senderPath = reader.ReadString()!;
+        reader.ReadInt32(); // serializer id
+        reader.ReadString(); // manifest
+        var innerBytes = reader.ReadBytes()!.Value.ToArray();
+
+        var inner = DeserializeUserCreated(innerBytes);
+        return new RemoteEnvelope(recipientPath, senderPath, inner);
+    }
+
+    public RemoteEnvelope DeserializeThreeLayer(byte[] bytes)
+    {
+        // Outer RemoteEnvelope
+        var r = new MessagePackReader(bytes);
+        r.ReadArrayHeader();
+        var outerRecipient = r.ReadString()!;
+        var outerSender = r.ReadString()!;
+        r.ReadInt32(); r.ReadString();
+        var ddataBytes = r.ReadBytes()!.Value.ToArray();
+
+        // DDataEnvelope
+        var r2 = new MessagePackReader(ddataBytes);
+        r2.ReadArrayHeader();
+        var key = r2.ReadString()!;
+        var version = r2.ReadInt64();
+        r2.ReadInt32(); r2.ReadString();
+        var innerRemoteBytes = r2.ReadBytes()!.Value.ToArray();
+
+        // Inner RemoteEnvelope
+        var r3 = new MessagePackReader(innerRemoteBytes);
+        r3.ReadArrayHeader();
+        var innerRecipient = r3.ReadString()!;
+        var innerSender = r3.ReadString()!;
+        r3.ReadInt32(); r3.ReadString();
+        var userBytes = r3.ReadBytes()!.Value.ToArray();
+
+        var user = DeserializeUserCreated(userBytes);
+        var innerRemote = new RemoteEnvelope(innerRecipient, innerSender, user);
+        var ddata = new DDataEnvelope(key, version, innerRemote);
+        return new RemoteEnvelope(outerRecipient, outerSender, ddata);
+    }
+
+    private static byte[] SerializeUserCreated(UserCreated msg)
+    {
+        var buffer = new ArrayBufferWriter<byte>(128);
+        var writer = new MessagePackWriter(buffer);
+        writer.WriteArrayHeader(3);
+        writer.Write(msg.UserId);
+        writer.Write(msg.Email);
+        writer.Write(msg.CreatedAt.ToBinary());
+        writer.Flush();
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    private static UserCreated DeserializeUserCreated(byte[] bytes)
+    {
+        var reader = new MessagePackReader(bytes);
+        reader.ReadArrayHeader();
+        var userId = reader.ReadString()!;
+        var email = reader.ReadString()!;
+        var createdAt = DateTime.FromBinary(reader.ReadInt64());
+        return new UserCreated(userId, email, createdAt);
     }
 }
