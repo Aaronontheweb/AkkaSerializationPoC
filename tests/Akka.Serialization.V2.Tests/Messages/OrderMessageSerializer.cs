@@ -40,8 +40,7 @@ public sealed class OrderMessageSerializer : SerializerV2
         writer.BeginObject(4);
         writer.WriteGuid(msg.OrderId);
         writer.WriteString(msg.CustomerId);
-        // Handle decimal as double for simplicity
-        writer.WriteDouble((double)msg.Amount);
+        writer.WriteDecimal(msg.Amount);
         writer.WriteDateTimeOffset(msg.PlacedAt);
     }
 
@@ -52,7 +51,7 @@ public sealed class OrderMessageSerializer : SerializerV2
         // Read known fields
         var orderId = reader.ReadGuid();
         var customerId = reader.ReadString() ?? string.Empty;
-        var amount = (decimal)reader.ReadDouble();
+        var amount = reader.ReadDecimal();
         var placedAt = reader.ReadDateTimeOffset();
 
         // Skip unknown trailing fields for forward compatibility

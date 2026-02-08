@@ -39,21 +39,15 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(buffer))
-        {
-            _generatedSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codec.CreateWriter(buffer);
+        _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        UserCreatedAnnotated deserialized;
-        using (var reader = _codec.CreateReader(bytes))
-        {
-            var manifest = _generatedSerializer.Manifest(original);
-            deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, manifest!);
-        }
+        var manifest = _generatedSerializer.Manifest(original);
+        var reader = _codec.CreateReader(bytes);
+        var deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -74,21 +68,15 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(buffer))
-        {
-            _generatedSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codec.CreateWriter(buffer);
+        _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        UserUpdatedAnnotated deserialized;
-        using (var reader = _codec.CreateReader(bytes))
-        {
-            var manifest = _generatedSerializer.Manifest(original);
-            deserialized = (UserUpdatedAnnotated)_generatedSerializer.Read(reader, manifest!);
-        }
+        var manifest = _generatedSerializer.Manifest(original);
+        var reader = _codec.CreateReader(bytes);
+        var deserialized = (UserUpdatedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -110,21 +98,15 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(buffer))
-        {
-            _generatedSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codec.CreateWriter(buffer);
+        _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        UserUpdatedAnnotated deserialized;
-        using (var reader = _codec.CreateReader(bytes))
-        {
-            var manifest = _generatedSerializer.Manifest(original);
-            deserialized = (UserUpdatedAnnotated)_generatedSerializer.Read(reader, manifest!);
-        }
+        var manifest = _generatedSerializer.Manifest(original);
+        var reader = _codec.CreateReader(bytes);
+        var deserialized = (UserUpdatedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -149,21 +131,15 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(buffer))
-        {
-            _generatedSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codec.CreateWriter(buffer);
+        _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        OrderPlacedAnnotated deserialized;
-        using (var reader = _codec.CreateReader(bytes))
-        {
-            var manifest = _generatedSerializer.Manifest(original);
-            deserialized = (OrderPlacedAnnotated)_generatedSerializer.Read(reader, manifest!);
-        }
+        var manifest = _generatedSerializer.Manifest(original);
+        var reader = _codec.CreateReader(bytes);
+        var deserialized = (OrderPlacedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -190,19 +166,13 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(handWrittenBuffer))
-        {
-            _handWrittenUserSerializer.Write(writer, handWrittenMsg);
-            writer.Flush();
-        }
+        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        _handWrittenUserSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(generatedBuffer))
-        {
-            _generatedSerializer.Write(writer, generatedMsg);
-            writer.Flush();
-        }
+        var genWriter = _codec.CreateWriter(generatedBuffer);
+        _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
         var handWrittenBytes = handWrittenBuffer.WrittenSpan.ToArray();
@@ -222,19 +192,13 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(handWrittenBuffer))
-        {
-            _handWrittenUserSerializer.Write(writer, handWrittenMsg);
-            writer.Flush();
-        }
+        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        _handWrittenUserSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(generatedBuffer))
-        {
-            _generatedSerializer.Write(writer, generatedMsg);
-            writer.Flush();
-        }
+        var genWriter = _codec.CreateWriter(generatedBuffer);
+        _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
         var handWrittenBytes = handWrittenBuffer.WrittenSpan.ToArray();
@@ -254,19 +218,13 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(handWrittenBuffer))
-        {
-            _handWrittenUserSerializer.Write(writer, handWrittenMsg);
-            writer.Flush();
-        }
+        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        _handWrittenUserSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(generatedBuffer))
-        {
-            _generatedSerializer.Write(writer, generatedMsg);
-            writer.Flush();
-        }
+        var genWriter = _codec.CreateWriter(generatedBuffer);
+        _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
         var handWrittenBytes = handWrittenBuffer.WrittenSpan.ToArray();
@@ -287,19 +245,13 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(handWrittenBuffer))
-        {
-            _handWrittenOrderSerializer.Write(writer, handWrittenMsg);
-            writer.Flush();
-        }
+        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        _handWrittenOrderSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(generatedBuffer))
-        {
-            _generatedSerializer.Write(writer, generatedMsg);
-            writer.Flush();
-        }
+        var genWriter = _codec.CreateWriter(generatedBuffer);
+        _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
         var handWrittenBytes = handWrittenBuffer.WrittenSpan.ToArray();
@@ -314,6 +266,30 @@ public class ReferenceGeneratedTests
     // =====================================================================
 
     [Fact]
+    public void Generated_BackwardCompat_DeserializesOlderDataWithFewerFields()
+    {
+        // Simulate V1 data that only had 2 fields (UserId, Email)
+        // being deserialized by V2 reader expecting 3 fields (UserId, Email, CreatedAt)
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = _codec.CreateWriter(buffer);
+        writer.BeginObject(2); // Only 2 fields instead of 3
+        writer.WriteString("user-old");
+        writer.WriteString("old@example.com");
+
+        var bytes = buffer.WrittenMemory;
+
+        // Act - Deserialize with current deserializer (expects 3 fields)
+        var reader = _codec.CreateReader(bytes);
+        var deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, "user-created-v1");
+
+        // Assert - Should read available fields and use defaults for missing ones
+        deserialized.Should().NotBeNull();
+        deserialized.UserId.Should().Be("user-old");
+        deserialized.Email.Should().Be("old@example.com");
+        deserialized.CreatedAt.Should().Be(default(DateTime)); // Missing field defaults to default
+    }
+
+    [Fact]
     public void Generated_VersionTolerance_SkipsUnknownFields()
     {
         // This test simulates a V2 serializer (with 4 fields) serializing data
@@ -322,25 +298,19 @@ public class ReferenceGeneratedTests
 
         // Arrange - Manually create a UserCreatedAnnotated message with 4 fields (simulating V2)
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(buffer))
-        {
-            // Write a UserCreatedAnnotated-like message with an extra field
-            writer.BeginObject(4); // 4 fields instead of 3
-            writer.WriteString("user-v2");
-            writer.WriteString("v2@example.com");
-            writer.WriteDateTime(new DateTime(2024, 5, 1, 12, 0, 0, DateTimeKind.Utc));
-            writer.WriteString("extra-field-data"); // Extra field added in V2
-            writer.Flush();
-        }
+        var writer = _codec.CreateWriter(buffer);
+        // Write a UserCreatedAnnotated-like message with an extra field
+        writer.BeginObject(4); // 4 fields instead of 3
+        writer.WriteString("user-v2");
+        writer.WriteString("v2@example.com");
+        writer.WriteDateTime(new DateTime(2024, 5, 1, 12, 0, 0, DateTimeKind.Utc));
+        writer.WriteString("extra-field-data"); // Extra field added in V2
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize with V1 deserializer (expects 3 fields)
-        UserCreatedAnnotated deserialized;
-        using (var reader = _codec.CreateReader(bytes))
-        {
-            deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, "user-created-v1");
-        }
+        var reader = _codec.CreateReader(bytes);
+        var deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, "user-created-v1");
 
         // Assert - Should successfully read the first 3 fields and skip the 4th
         deserialized.Should().NotBeNull();

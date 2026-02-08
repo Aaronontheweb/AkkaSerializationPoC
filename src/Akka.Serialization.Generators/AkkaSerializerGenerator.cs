@@ -21,6 +21,37 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
     private const string SerializableAttributeFullName = "Akka.Serialization.V2.AkkaSerializableAttribute";
     private const string FieldAttributeFullName = "Akka.Serialization.V2.AkkaFieldAttribute";
 
+    // Diagnostic descriptors
+    private static readonly DiagnosticDescriptor NoFieldsDiagnostic = new DiagnosticDescriptor(
+        "AKKA001", "No fields defined",
+        "[AkkaSerializable] type '{0}' has zero [AkkaField] properties",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor GappedIndicesDiagnostic = new DiagnosticDescriptor(
+        "AKKA002", "Field index gap",
+        "[AkkaSerializable] type '{0}' has gaps in field indices (found: {1})",
+        "Akka.Serialization", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor UnsupportedTypeDiagnostic = new DiagnosticDescriptor(
+        "AKKA003", "Unsupported property type",
+        "Property '{0}' on type '{1}' has unsupported type '{2}'",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor NoModuleDiagnostic = new DiagnosticDescriptor(
+        "AKKA004", "No serializer module",
+        "[AkkaSerializable] types exist but no [AkkaSerializerModule] class was found",
+        "Akka.Serialization", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor DuplicateFieldIndexDiagnostic = new DiagnosticDescriptor(
+        "AKKA006", "Duplicate field index",
+        "[AkkaSerializable] type '{0}' has duplicate field index {1}",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor DuplicateManifestDiagnostic = new DiagnosticDescriptor(
+        "AKKA007", "Duplicate manifest",
+        "Multiple [AkkaSerializable] types share manifest '{0}': {1}",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // Step 1: Find all types with [AkkaSerializerModule]
@@ -44,7 +75,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         // Step 3: Collect all serializable types into an array
         var serializableCollection = serializableProvider.Collect();
 
-        // Step 4: Combine each module with all serializable types
+        // Step 4: Combine each module with all serializable types and compilation
         var combined = moduleProvider.Combine(serializableCollection);
 
         // Step 5: Register source output
@@ -56,10 +87,118 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
             if (module == null)
                 return;
 
+            // Validate and report diagnostics
+            ValidateSerializables(spc, serializables);
+            ValidateManifestUniqueness(spc, serializables);
+
             var source = GenerateSerializerCode(module, serializables);
             var hintName = module.ClassName + ".g.cs";
             spc.AddSource(hintName, source);
         });
+
+        // Step 6: AKKA004 - Warn if [AkkaSerializable] types exist but no module found
+        var moduleCollection = moduleProvider.Collect();
+        var noModuleCheck = serializableCollection.Combine(moduleCollection);
+        context.RegisterSourceOutput(noModuleCheck, static (spc, pair) =>
+        {
+            var serializables = pair.Left;
+            var modules = pair.Right;
+            if (serializables.Length > 0 && modules.Length == 0)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(NoModuleDiagnostic, Location.None));
+            }
+        });
+    }
+
+    private static void ValidateSerializables(
+        SourceProductionContext spc,
+        ImmutableArray<SerializableTypeInfo> serializables)
+    {
+        for (int i = 0; i < serializables.Length; i++)
+        {
+            var s = serializables[i];
+            if (s == null) continue;
+
+            // AKKA001: No fields
+            if (s.Fields.Length == 0)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(NoFieldsDiagnostic, Location.None, s.SimpleName));
+            }
+
+            // AKKA006: Duplicate field indices
+            var indexSet = new HashSet<int>();
+            foreach (var field in s.Fields)
+            {
+                if (!indexSet.Add(field.Index))
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(DuplicateFieldIndexDiagnostic, Location.None,
+                        s.SimpleName, field.Index));
+                }
+            }
+
+            // AKKA002: Gapped indices
+            if (s.Fields.Length > 0)
+            {
+                var indices = new List<int>();
+                foreach (var f in s.Fields)
+                    indices.Add(f.Index);
+                indices.Sort();
+                bool hasGap = false;
+                for (int j = 0; j < indices.Count; j++)
+                {
+                    if (indices[j] != j)
+                    {
+                        hasGap = true;
+                        break;
+                    }
+                }
+                if (hasGap)
+                {
+                    var indicesStr = string.Join(", ", indices);
+                    spc.ReportDiagnostic(Diagnostic.Create(GappedIndicesDiagnostic, Location.None,
+                        s.SimpleName, indicesStr));
+                }
+            }
+
+            // AKKA003: Unsupported types
+            foreach (var field in s.Fields)
+            {
+                if (field.TypeMapping.WriteMethod == "/* UNSUPPORTED */")
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(UnsupportedTypeDiagnostic, Location.None,
+                        field.PropertyName, s.SimpleName, field.TypeMapping.CSharpType));
+                }
+            }
+        }
+    }
+
+    private static void ValidateManifestUniqueness(
+        SourceProductionContext spc,
+        ImmutableArray<SerializableTypeInfo> serializables)
+    {
+        // AKKA007: Duplicate manifests
+        var manifestMap = new Dictionary<string, List<string>>();
+        for (int i = 0; i < serializables.Length; i++)
+        {
+            var s = serializables[i];
+            if (s == null || string.IsNullOrEmpty(s.Manifest)) continue;
+
+            if (!manifestMap.TryGetValue(s.Manifest, out var list))
+            {
+                list = new List<string>();
+                manifestMap[s.Manifest] = list;
+            }
+            list.Add(s.SimpleName);
+        }
+
+        foreach (var kvp in manifestMap)
+        {
+            if (kvp.Value.Count > 1)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(DuplicateManifestDiagnostic, Location.None,
+                    kvp.Key, string.Join(", ", kvp.Value)));
+            }
+        }
     }
 
     private static ModuleInfo ExtractModuleInfo(
@@ -105,8 +244,8 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
             }
         }
 
-        // Get the fully qualified type name (for use in generated code)
-        var fullyQualifiedName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        // Get the fully qualified type name, handling nested types
+        var fullyQualifiedName = GetFullyQualifiedTypeName(symbol);
         // Also get the simple name for method naming
         var simpleName = symbol.Name;
 
@@ -142,6 +281,32 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         fields.Sort((a, b) => a.Index.CompareTo(b.Index));
 
         return new SerializableTypeInfo(fullyQualifiedName, simpleName, manifest, fields.ToArray());
+    }
+
+    private static string GetFullyQualifiedTypeName(INamedTypeSymbol symbol)
+    {
+        // Walk ContainingType chain for nested types (e.g., MyActor.Commands.CreateUser)
+        var parts = new List<string>();
+        parts.Add(symbol.Name);
+
+        var containingType = symbol.ContainingType;
+        while (containingType != null)
+        {
+            parts.Insert(0, containingType.Name);
+            containingType = containingType.ContainingType;
+        }
+
+        // Build the namespace prefix
+        var nsParts = new List<string>();
+        var ns = symbol.ContainingNamespace;
+        while (ns != null && !ns.IsGlobalNamespace)
+        {
+            nsParts.Insert(0, ns.Name);
+            ns = ns.ContainingNamespace;
+        }
+
+        var nsPrefix = nsParts.Count > 0 ? "global::" + string.Join(".", nsParts) + "." : "global::";
+        return nsPrefix + string.Join(".", parts);
     }
 
     private static TypeMapping GetTypeMapping(ITypeSymbol typeSymbol)
@@ -199,9 +364,8 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
 
         if (specialType == SpecialType.System_Decimal)
         {
-            return new TypeMapping("decimal", "WriteDouble", "ReadDouble",
-                isNullableReference: false, nullDefault: "0m",
-                writePrefix: "(double)", readPrefix: "(decimal)");
+            return new TypeMapping("decimal", "WriteDecimal", "ReadDecimal",
+                isNullableReference: false, nullDefault: "0m");
         }
 
         if (specialType == SpecialType.System_DateTime || fullName == "global::System.DateTime")
@@ -292,8 +456,54 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         }
 
         sb.AppendLine("}");
+        sb.AppendLine();
+
+        // Generate SerializerSetup class (always)
+        GenerateSerializerSetup(sb, module, serializables);
+
+        // Note: Akka.Hosting extension method is NOT generated because
+        // SerializerV2 is not a subclass of Akka.Serialization.Serializer.
+        // V2 serializers need their own Akka.Hosting registration API.
 
         return sb.ToString();
+    }
+
+    private static void GenerateSerializerSetup(
+        StringBuilder sb,
+        ModuleInfo module,
+        ImmutableArray<SerializableTypeInfo> serializables)
+    {
+        var setupClassName = module.ClassName + "Setup";
+
+        if (!string.IsNullOrEmpty(module.Namespace))
+        {
+            // Already in same namespace from file-scoped namespace
+        }
+
+        sb.AppendLine("/// <summary>");
+        sb.AppendLine("/// SerializerSetup for " + module.ClassName + ". Use with Akka.NET configuration.");
+        sb.AppendLine("/// </summary>");
+        sb.AppendLine("public sealed class " + setupClassName);
+        sb.AppendLine("{");
+        sb.AppendLine("    public static readonly " + setupClassName + " Instance = new();");
+        sb.AppendLine();
+
+        sb.AppendLine("    public System.Type SerializerType => typeof(" + module.ClassName + ");");
+        sb.AppendLine();
+
+        // Bound types
+        sb.AppendLine("    public static System.Type[] BoundTypes => new System.Type[]");
+        sb.AppendLine("    {");
+        for (int i = 0; i < serializables.Length; i++)
+        {
+            var s = serializables[i];
+            if (s == null) continue;
+            var comma = i < serializables.Length - 1 ? "," : "";
+            sb.AppendLine("        typeof(" + s.FullyQualifiedName + ")" + comma);
+        }
+        sb.AppendLine("    };");
+
+        sb.AppendLine("}");
     }
 
     private static void GenerateManifestMethod(
@@ -402,7 +612,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         sb.AppendLine("    {");
         sb.AppendLine("        var fieldCount = reader.BeginReadObject();");
 
-        // Generate local variables for each field
+        // Generate local variables for each field with fieldCount guards for backward compat
         for (int i = 0; i < type.Fields.Length; i++)
         {
             var field = type.Fields[i];
@@ -411,22 +621,22 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
 
             if (mapping.IsNullableReference)
             {
-                // Nullable reference - use TryReadNull
-                sb.AppendLine("        var " + varName + " = reader.TryReadNull() ? null : reader." + mapping.ReadMethod + "();");
+                // Nullable reference - use TryReadNull, default to null if field missing
+                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? (reader.TryReadNull() ? null : reader." + mapping.ReadMethod + "()) : " + mapping.NullDefault + ";");
             }
             else if (mapping.ReadExpression != null)
             {
                 // Custom read expression (e.g., ReadString() ?? string.Empty)
-                sb.AppendLine("        var " + varName + " = reader." + mapping.ReadExpression + ";");
+                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? reader." + mapping.ReadExpression + " : " + mapping.NullDefault + ";");
             }
             else if (mapping.ReadPrefix != null)
             {
-                // Types needing a cast on read (e.g., (decimal)ReadDouble())
-                sb.AppendLine("        var " + varName + " = " + mapping.ReadPrefix + "reader." + mapping.ReadMethod + "();");
+                // Types needing a cast on read
+                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? " + mapping.ReadPrefix + "reader." + mapping.ReadMethod + "() : " + mapping.NullDefault + ";");
             }
             else
             {
-                sb.AppendLine("        var " + varName + " = reader." + mapping.ReadMethod + "();");
+                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? reader." + mapping.ReadMethod + "() : " + mapping.NullDefault + ";");
             }
         }
 
@@ -452,6 +662,26 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
     {
         if (string.IsNullOrEmpty(name)) return name;
         return char.ToLowerInvariant(name[0]) + name.Substring(1);
+    }
+
+    private static string ToKebabCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        var sb = new StringBuilder();
+        for (int i = 0; i < name.Length; i++)
+        {
+            var c = name[i];
+            if (char.IsUpper(c))
+            {
+                if (i > 0) sb.Append('-');
+                sb.Append(char.ToLowerInvariant(c));
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
     }
 
     private static string GetFullNamespace(ISymbol symbol)

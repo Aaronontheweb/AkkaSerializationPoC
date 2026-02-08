@@ -34,18 +34,12 @@ public class GeneratedSerializerTests
 
         // Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codec.CreateWriter(buffer))
-        {
-            remoteSerializer.Write(writer, envelope);
-            writer.Flush();
-        }
+        var writer = _codec.CreateWriter(buffer);
+        remoteSerializer.Write(writer, envelope);
 
         // Deserialize
-        RemoteEnvelope deserialized;
-        using (var reader = _codec.CreateReader(buffer.WrittenMemory))
-        {
-            deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, "remote-envelope-v1");
-        }
+        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Assert
         deserialized.RecipientPath.Should().Be("/user/target");

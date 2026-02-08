@@ -30,6 +30,13 @@ public abstract class SerializerV2
     public abstract int Identifier { get; }
 
     /// <summary>
+    /// Optional reference to the ActorSystem. Set by the SerializerRegistry
+    /// when the serializer is registered with a system-aware registry.
+    /// Serializers that need to resolve ActorRefs (e.g. by path) can use this.
+    /// </summary>
+    public Akka.Actor.ExtendedActorSystem? System { get; internal set; }
+
+    /// <summary>
     /// Returns the manifest string for the given object.
     /// The manifest provides a type hint for polymorphic deserialization.
     /// </summary>

@@ -27,21 +27,15 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _userSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _userSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        UserCreated deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = _userSerializer.Manifest(original);
-            deserialized = (UserCreated)_userSerializer.Read(reader, manifest!);
-        }
+        var manifest = _userSerializer.Manifest(original);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (UserCreated)_userSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -62,21 +56,15 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _userSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _userSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        UserUpdated deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = _userSerializer.Manifest(original);
-            deserialized = (UserUpdated)_userSerializer.Read(reader, manifest!);
-        }
+        var manifest = _userSerializer.Manifest(original);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (UserUpdated)_userSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -98,21 +86,15 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _userSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _userSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        UserUpdated deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = _userSerializer.Manifest(original);
-            deserialized = (UserUpdated)_userSerializer.Read(reader, manifest!);
-        }
+        var manifest = _userSerializer.Manifest(original);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (UserUpdated)_userSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -137,21 +119,15 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            _orderSerializer.Write(writer, original);
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        _orderSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        OrderPlaced deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            var manifest = _orderSerializer.Manifest(original);
-            deserialized = (OrderPlaced)_orderSerializer.Read(reader, manifest!);
-        }
+        var manifest = _orderSerializer.Manifest(original);
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (OrderPlaced)_orderSerializer.Read(reader, manifest!);
 
         // Assert
         deserialized.Should().NotBeNull();
@@ -163,6 +139,32 @@ public class FlatMessageTests
     }
 
     [Fact]
+    public void Should_RoundTrip_Decimal_WithFullPrecision()
+    {
+        // Arrange - Use a decimal value that would lose precision with double cast
+        var preciseAmount = decimal.MaxValue / 3; // 26409387504754779197847983026m
+        var orderId = Guid.Parse("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+        var placedAt = new DateTimeOffset(2024, 4, 5, 16, 20, 0, TimeSpan.FromHours(-5));
+
+        var original = new OrderPlaced(orderId, "customer-001", preciseAmount, placedAt);
+
+        // Act - Serialize
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = _codecProvider.CreateWriter(buffer);
+        _orderSerializer.Write(writer, original);
+
+        var bytes = buffer.WrittenMemory;
+
+        // Act - Deserialize
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (OrderPlaced)_orderSerializer.Read(reader, "order-placed-v1");
+
+        // Assert - decimal must survive round-trip with EXACT precision
+        deserialized.Amount.Should().Be(preciseAmount,
+            "decimal round-trip must be lossless (no double conversion)");
+    }
+
+    [Fact]
     public void Should_SkipUnknownFields_When_DeserializingOlderVersion()
     {
         // This test simulates a V2 serializer (with 4 fields) serializing data
@@ -171,25 +173,19 @@ public class FlatMessageTests
 
         // Arrange - Manually create a UserCreated message with 4 fields (simulating V2)
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            // Write a UserCreated-like message with an extra field
-            writer.BeginObject(4); // 4 fields instead of 3
-            writer.WriteString("user-v2");
-            writer.WriteString("v2@example.com");
-            writer.WriteDateTime(new DateTime(2024, 5, 1, 12, 0, 0, DateTimeKind.Utc));
-            writer.WriteString("extra-field-data"); // Extra field added in V2
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        // Write a UserCreated-like message with an extra field
+        writer.BeginObject(4); // 4 fields instead of 3
+        writer.WriteString("user-v2");
+        writer.WriteString("v2@example.com");
+        writer.WriteDateTime(new DateTime(2024, 5, 1, 12, 0, 0, DateTimeKind.Utc));
+        writer.WriteString("extra-field-data"); // Extra field added in V2
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize with V1 deserializer (expects 3 fields)
-        UserCreated deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
-        {
-            deserialized = (UserCreated)_userSerializer.Read(reader, "user-created-v1");
-        }
+        var reader = _codecProvider.CreateReader(bytes);
+        var deserialized = (UserCreated)_userSerializer.Read(reader, "user-created-v1");
 
         // Assert - Should successfully read the first 3 fields and skip the 4th
         deserialized.Should().NotBeNull();
@@ -207,41 +203,35 @@ public class FlatMessageTests
 
         // Arrange - Manually create a UserUpdated message with only 2 fields (simulating V1)
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = _codecProvider.CreateWriter(buffer))
-        {
-            // Write a UserUpdated-like message with only UserId and UpdatedAt (missing NewEmail and NewName)
-            writer.BeginObject(2); // Only 2 fields instead of 4
-            writer.WriteString("user-v1");
-            writer.WriteDateTime(new DateTime(2024, 6, 1, 8, 30, 0, DateTimeKind.Utc));
-            writer.Flush();
-        }
+        var writer = _codecProvider.CreateWriter(buffer);
+        // Write a UserUpdated-like message with only UserId and UpdatedAt (missing NewEmail and NewName)
+        writer.BeginObject(2); // Only 2 fields instead of 4
+        writer.WriteString("user-v1");
+        writer.WriteDateTime(new DateTime(2024, 6, 1, 8, 30, 0, DateTimeKind.Utc));
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize with current deserializer (expects 4 fields)
-        UserUpdated deserialized;
-        using (var reader = _codecProvider.CreateReader(bytes))
+        var reader = _codecProvider.CreateReader(bytes);
+        var fieldCount = reader.BeginReadObject();
+
+        // Read available fields
+        var userId = reader.ReadString() ?? string.Empty;
+
+        // Handle missing fields - provide defaults for NewEmail and NewName
+        string? newEmail = null;
+        string? newName = null;
+        DateTime updatedAt = default;
+
+        if (fieldCount >= 2)
         {
-            var fieldCount = reader.BeginReadObject();
-
-            // Read available fields
-            var userId = reader.ReadString() ?? string.Empty;
-
-            // Handle missing fields - provide defaults for NewEmail and NewName
-            string? newEmail = null;
-            string? newName = null;
-            DateTime updatedAt = default;
-
-            if (fieldCount >= 2)
-            {
-                updatedAt = reader.ReadDateTime();
-            }
-
-            // Fields 2 and 3 are missing (NewEmail and NewName would normally be here)
-            // We treat them as null for backwards compatibility
-
-            deserialized = new UserUpdated(userId, newEmail, newName, updatedAt);
+            updatedAt = reader.ReadDateTime();
         }
+
+        // Fields 2 and 3 are missing (NewEmail and NewName would normally be here)
+        // We treat them as null for backwards compatibility
+
+        var deserialized = new UserUpdated(userId, newEmail, newName, updatedAt);
 
         // Assert - Should successfully read available fields and use defaults for missing ones
         deserialized.Should().NotBeNull();

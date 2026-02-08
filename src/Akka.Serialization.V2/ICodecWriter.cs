@@ -12,7 +12,7 @@ namespace Akka.Serialization.V2;
 /// The writer maintains a reference to an IBufferWriter&lt;byte&gt; internally and writes directly to it.
 /// Multiple serializers can share the same writer instance to achieve zero-copy nested serialization.
 /// </remarks>
-public interface ICodecWriter : IDisposable
+public interface ICodecWriter
 {
     /// <summary>
     /// Begins writing an object with the specified number of fields.
@@ -67,13 +67,12 @@ public interface ICodecWriter : IDisposable
     void WriteBytes(ReadOnlySpan<byte> value);
 
     /// <summary>
+    /// Writes a decimal value with full precision (no loss from double conversion).
+    /// </summary>
+    void WriteDecimal(decimal value);
+
+    /// <summary>
     /// Writes a null value.
     /// </summary>
     void WriteNull();
-
-    /// <summary>
-    /// Flushes any buffered data to the underlying buffer.
-    /// Must be called when writing is complete.
-    /// </summary>
-    void Flush();
 }

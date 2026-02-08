@@ -21,7 +21,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 {
     private readonly ReadOnlyMemory<byte> _buffer;
     private int _consumed;
-    private bool _disposed;
 
     public MessagePackCodecReader(ReadOnlyMemory<byte> buffer)
     {
@@ -33,7 +32,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public int BeginReadObject()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         var fieldCount = reader.ReadArrayHeader();
         _consumed += (int)reader.Consumed;
@@ -42,7 +40,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public int ReadInt32()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         var value = reader.ReadInt32();
         _consumed += (int)reader.Consumed;
@@ -51,7 +48,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public long ReadInt64()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         var value = reader.ReadInt64();
         _consumed += (int)reader.Consumed;
@@ -60,7 +56,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public string? ReadString()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         var value = reader.ReadString();
         _consumed += (int)reader.Consumed;
@@ -69,7 +64,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public bool ReadBool()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         var value = reader.ReadBoolean();
         _consumed += (int)reader.Consumed;
@@ -78,7 +72,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public double ReadDouble()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         var value = reader.ReadDouble();
         _consumed += (int)reader.Consumed;
@@ -87,7 +80,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public DateTime ReadDateTime()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
 
         // Deserialize from [ticks (long), Kind (int)]
@@ -104,7 +96,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public DateTimeOffset ReadDateTimeOffset()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
 
         // Deserialize from [ticks (long), offset minutes (int)]
@@ -121,7 +112,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public Guid ReadGuid()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
 
         // Read 16-byte binary
@@ -145,9 +135,26 @@ internal sealed class MessagePackCodecReader : ICodecReader
         }
     }
 
+    public decimal ReadDecimal()
+    {
+        var reader = new MessagePackReader(_buffer[_consumed..]);
+
+        // Deserialize from [lo, mid, hi, flags]
+        var arrayLength = reader.ReadArrayHeader();
+        if (arrayLength != 4)
+            throw new MessagePackSerializationException($"Expected decimal array with 4 elements, got {arrayLength}");
+
+        var lo = reader.ReadInt32();
+        var mid = reader.ReadInt32();
+        var hi = reader.ReadInt32();
+        var flags = reader.ReadInt32();
+
+        _consumed += (int)reader.Consumed;
+        return new decimal(new[] { lo, mid, hi, flags });
+    }
+
     public byte[]? ReadBytes()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         var bytes = reader.ReadBytes();
         _consumed += (int)reader.Consumed;
@@ -170,7 +177,6 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public bool TryReadNull()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
 
         if (reader.TryReadNil())
@@ -184,21 +190,9 @@ internal sealed class MessagePackCodecReader : ICodecReader
 
     public void SkipField()
     {
-        ThrowIfDisposed();
         var reader = new MessagePackReader(_buffer[_consumed..]);
         reader.Skip();
         _consumed += (int)reader.Consumed;
-    }
-
-    public void Dispose()
-    {
-        _disposed = true;
-    }
-
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(MessagePackCodecReader));
     }
 
     private static void CopySequenceToArray(in ReadOnlySequence<byte> sequence, byte[] destination)

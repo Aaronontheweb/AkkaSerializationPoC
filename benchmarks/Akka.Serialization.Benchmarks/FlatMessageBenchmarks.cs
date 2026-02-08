@@ -1,4 +1,5 @@
 using System.Buffers;
+using Akka.Actor;
 using Akka.Serialization.MessagePack;
 using Akka.Serialization.V2.Tests.Messages;
 using BenchmarkDotNet.Attributes;
@@ -7,21 +8,28 @@ using BenchmarkDotNet.Jobs;
 namespace Akka.Serialization.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing legacy byte[]-based serialization vs V2 IBufferWriter-based serialization
+/// Benchmarks comparing the default Akka.NET serializer (Newtonsoft.Json) vs V2 MessagePack
 /// for flat messages (no nesting).
 ///
-/// Legacy pattern: ArrayBufferWriter -> ToArray() -> byte[]
-/// V2 pattern: ArrayBufferWriter (no ToArray, zero-copy)
+/// This represents the real migration path: users moving from the default Newtonsoft.Json
+/// serializer to the new V2 codec-based system.
 /// </summary>
 [MemoryDiagnoser]
 [SimpleJob(RuntimeMoniker.Net90)]
 public class FlatMessageBenchmarks
 {
     private UserCreated _message = null!;
-    private UserMessageSerializer _serializer = null!;
+    private UserMessageSerializer _v2Serializer = null!;
     private ArrayBufferWriter<byte> _buffer = null!;
-    private byte[] _legacyBytes = null!;
-    private ReadOnlyMemory<byte> _v2Bytes;
+
+    // Legacy Newtonsoft.Json (Akka.NET default)
+    private ActorSystem _actorSystem = null!;
+    private Akka.Serialization.Serializer _newtonsoftSerializer = null!;
+    private byte[] _newtonsoftBytes = null!;
+    private string _newtonsoftManifest = null!;
+
+    // V2 pre-serialized
+    private byte[] _v2Bytes = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -31,27 +39,33 @@ public class FlatMessageBenchmarks
             "test@example.com",
             new DateTime(2025, 1, 15, 10, 30, 0, DateTimeKind.Utc));
 
-        _serializer = new UserMessageSerializer();
+        // V2 setup
+        _v2Serializer = new UserMessageSerializer();
         _buffer = new ArrayBufferWriter<byte>(256);
 
-        // Pre-serialize for deserialization benchmarks
-        // Legacy: serialize and convert to byte[]
-        _buffer.Clear();
-        using (var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer))
-        {
-            _serializer.Write(writer, _message);
-            writer.Flush();
-        }
-        _legacyBytes = _buffer.WrittenSpan.ToArray();
+        // Legacy setup - get Akka.NET's built-in Newtonsoft.Json serializer
+        _actorSystem = ActorSystem.Create("benchmark-system");
+        _newtonsoftSerializer = ((ExtendedActorSystem)_actorSystem).Serialization
+            .FindSerializerForType(typeof(UserCreated));
 
-        // V2: keep as ReadOnlyMemory<byte>
-        _buffer.Clear();
-        using (var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer))
-        {
-            _serializer.Write(writer, _message);
-            writer.Flush();
-        }
-        _v2Bytes = _buffer.WrittenMemory;
+        // Pre-serialize for deserialization benchmarks
+        _newtonsoftBytes = _newtonsoftSerializer.ToBinary(_message);
+
+        if (_newtonsoftSerializer is Akka.Serialization.SerializerWithStringManifest sm)
+            _newtonsoftManifest = sm.Manifest(_message);
+        else
+            _newtonsoftManifest = _message.GetType().FullName!;
+
+        var v2Buffer = new ArrayBufferWriter<byte>(256);
+        var writer = MessagePackCodecProvider.Instance.CreateWriter(v2Buffer);
+        _v2Serializer.Write(writer, _message);
+        _v2Bytes = v2Buffer.WrittenSpan.ToArray();
+    }
+
+    [GlobalCleanup]
+    public void Cleanup()
+    {
+        _actorSystem?.Terminate().Wait(TimeSpan.FromSeconds(5));
     }
 
     [IterationSetup]
@@ -61,52 +75,42 @@ public class FlatMessageBenchmarks
     }
 
     /// <summary>
-    /// Legacy pattern: Serialize to ArrayBufferWriter, then call ToArray() to get byte[].
-    /// This simulates the old ToBinary pattern that required allocating a byte[] copy.
+    /// Default Akka.NET serialization: Newtonsoft.Json ToBinary() -> byte[].
+    /// This is what most Akka.NET users have today.
     /// </summary>
     [Benchmark(Baseline = true)]
-    public byte[] Legacy_Serialize()
+    public byte[] NewtonsoftJson_Serialize()
     {
-        using var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
-        _serializer.Write(writer, _message);
-        writer.Flush();
-
-        // Legacy pattern: must convert to byte[] (extra allocation + copy)
-        return _buffer.WrittenSpan.ToArray();
+        return _newtonsoftSerializer.ToBinary(_message);
     }
 
     /// <summary>
-    /// V2 pattern: Serialize to ArrayBufferWriter without calling ToArray().
-    /// The buffer can be passed directly to the transport layer without copying.
+    /// V2 MessagePack serialization: write to pre-allocated buffer, no byte[] copy.
     /// </summary>
     [Benchmark]
     public ArrayBufferWriter<byte> V2_Serialize()
     {
-        using var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
-        _serializer.Write(writer, _message);
-        writer.Flush();
-
-        // V2 pattern: return the buffer directly (zero-copy)
+        var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
+        _v2Serializer.Write(writer, _message);
         return _buffer;
     }
 
     /// <summary>
-    /// Legacy pattern: Deserialize from byte[] (which may have required a copy from the network buffer).
+    /// Default Akka.NET deserialization: Newtonsoft.Json FromBinary() from byte[].
     /// </summary>
     [Benchmark]
-    public UserCreated Legacy_Deserialize()
+    public object NewtonsoftJson_Deserialize()
     {
-        using var reader = MessagePackCodecProvider.Instance.CreateReader(_legacyBytes);
-        return (UserCreated)_serializer.Read(reader, "user-created-v1");
+        return _newtonsoftSerializer.FromBinary(_newtonsoftBytes, typeof(UserCreated));
     }
 
     /// <summary>
-    /// V2 pattern: Deserialize from ReadOnlyMemory&lt;byte&gt; (zero-copy read from the buffer).
+    /// V2 MessagePack deserialization from pre-serialized bytes.
     /// </summary>
     [Benchmark]
     public UserCreated V2_Deserialize()
     {
-        using var reader = MessagePackCodecProvider.Instance.CreateReader(_v2Bytes);
-        return (UserCreated)_serializer.Read(reader, "user-created-v1");
+        var reader = MessagePackCodecProvider.Instance.CreateReader(_v2Bytes);
+        return (UserCreated)_v2Serializer.Read(reader, "user-created-v1");
     }
 }

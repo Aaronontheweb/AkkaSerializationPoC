@@ -20,7 +20,6 @@ namespace Akka.Serialization.MessagePack;
 internal sealed class MessagePackCodecWriter : ICodecWriter
 {
     private readonly IBufferWriter<byte> _buffer;
-    private bool _disposed;
 
     public MessagePackCodecWriter(IBufferWriter<byte> buffer)
     {
@@ -29,7 +28,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void BeginObject(int fieldCount)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.WriteArrayHeader(fieldCount);
         writer.Flush();
@@ -37,7 +35,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteInt32(int value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.Write(value);
         writer.Flush();
@@ -45,7 +42,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteInt64(long value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.Write(value);
         writer.Flush();
@@ -53,7 +49,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteString(string? value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.Write(value);
         writer.Flush();
@@ -61,7 +56,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteBool(bool value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.Write(value);
         writer.Flush();
@@ -69,7 +63,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteDouble(double value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.Write(value);
         writer.Flush();
@@ -77,7 +70,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteDateTime(DateTime value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         // Serialize as [ticks (long), Kind (int)]
         writer.WriteArrayHeader(2);
@@ -88,7 +80,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteDateTimeOffset(DateTimeOffset value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         // Serialize as [ticks (long), offset minutes (int)]
         writer.WriteArrayHeader(2);
@@ -99,7 +90,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteGuid(Guid value)
     {
-        ThrowIfDisposed();
         // Write Guid as 16-byte binary
         // Use ToByteArray() instead of stackalloc to avoid ref struct scope issues
         var guidBytes = value.ToByteArray();
@@ -108,9 +98,21 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
         writer.Flush();
     }
 
+    public void WriteDecimal(decimal value)
+    {
+        // Serialize as [lo, mid, hi, flags] array for lossless round-trip
+        var bits = decimal.GetBits(value);
+        var writer = new MessagePackWriter(_buffer);
+        writer.WriteArrayHeader(4);
+        writer.Write(bits[0]);
+        writer.Write(bits[1]);
+        writer.Write(bits[2]);
+        writer.Write(bits[3]);
+        writer.Flush();
+    }
+
     public void WriteBytes(ReadOnlySpan<byte> value)
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.Write(value);
         writer.Flush();
@@ -118,27 +120,8 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteNull()
     {
-        ThrowIfDisposed();
         var writer = new MessagePackWriter(_buffer);
         writer.WriteNil();
         writer.Flush();
-    }
-
-    public void Flush()
-    {
-        ThrowIfDisposed();
-        // MessagePackWriter.Flush() already writes to the IBufferWriter
-        // Nothing additional needed here
-    }
-
-    public void Dispose()
-    {
-        _disposed = true;
-    }
-
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(MessagePackCodecWriter));
     }
 }

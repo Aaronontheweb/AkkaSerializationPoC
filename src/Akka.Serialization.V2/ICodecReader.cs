@@ -16,7 +16,7 @@ namespace Akka.Serialization.V2;
 /// The reader maintains an internal position offset and advances it as data is consumed.
 /// Multiple deserializers can share the same reader instance for nested deserialization.
 /// </remarks>
-public interface ICodecReader : IDisposable
+public interface ICodecReader
 {
     /// <summary>
     /// Begins reading an object and returns the number of fields.
@@ -64,6 +64,11 @@ public interface ICodecReader : IDisposable
     /// Reads a Guid value.
     /// </summary>
     Guid ReadGuid();
+
+    /// <summary>
+    /// Reads a decimal value with full precision.
+    /// </summary>
+    decimal ReadDecimal();
 
     /// <summary>
     /// Reads a byte array value. Returns null if the value is null.

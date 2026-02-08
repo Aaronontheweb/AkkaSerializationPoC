@@ -18,6 +18,24 @@ public sealed class SerializerRegistry
 {
     private readonly ConcurrentDictionary<int, SerializerV2> _byId = new();
     private readonly ConcurrentDictionary<Type, SerializerV2> _byType = new();
+    private readonly Akka.Actor.ExtendedActorSystem? _system;
+
+    /// <summary>
+    /// Creates a registry without an ActorSystem reference.
+    /// Serializers will not be able to resolve ActorRefs.
+    /// </summary>
+    public SerializerRegistry() { }
+
+    /// <summary>
+    /// Creates a registry with an ActorSystem reference.
+    /// Registered serializers will have their System property set,
+    /// enabling ActorRef resolution during serialization/deserialization.
+    /// </summary>
+    /// <param name="system">The ActorSystem to associate with serializers</param>
+    public SerializerRegistry(Akka.Actor.ExtendedActorSystem system)
+    {
+        _system = system ?? throw new ArgumentNullException(nameof(system));
+    }
 
     /// <summary>
     /// Registers a serializer for the given types.
@@ -35,8 +53,21 @@ public sealed class SerializerRegistry
                 nameof(serializer));
         }
 
+        // Set the system reference if available
+        if (_system != null)
+        {
+            serializer.System = _system;
+        }
+
         foreach (var type in types)
         {
+            if (_byType.TryGetValue(type, out var existing) && !ReferenceEquals(existing, serializer))
+            {
+                throw new ArgumentException(
+                    $"Type {type} is already registered to serializer ID {existing.Identifier}, " +
+                    $"cannot register to serializer ID {serializer.Identifier}",
+                    nameof(types));
+            }
             _byType[type] = serializer;
         }
     }
@@ -105,6 +136,7 @@ public sealed class SerializerRegistry
     /// <returns>The registered serializer, or null if no match found</returns>
     public SerializerV2? FindFor(object obj)
     {
+        ArgumentNullException.ThrowIfNull(obj);
         return FindFor(obj.GetType());
     }
 }
