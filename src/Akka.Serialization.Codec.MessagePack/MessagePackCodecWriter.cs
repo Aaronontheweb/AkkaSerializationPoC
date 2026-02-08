@@ -92,18 +92,22 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
     {
         // Write Guid as 16-byte binary
         // Use ToByteArray() instead of stackalloc to avoid ref struct scope issues
-        var guidBytes = value.ToByteArray();
+        //var guidBytes = value.ToByteArray();
         var writer = new MessagePackWriter(_buffer);
-        writer.Write(guidBytes);
+        writer.WriteBinHeader(16);
+        value.TryWriteBytes(writer.GetSpan(16));
+        writer.Advance(16);
         writer.Flush();
     }
 
     public void WriteDecimal(decimal value)
     {
         // Serialize as [lo, mid, hi, flags] array for lossless round-trip
-        var bits = decimal.GetBits(value);
+        // Consider: should we EXT for decimal for consistency with Messagepack-csharp built in ext spec?
+        Span<int> bits = stackalloc int[4];
         var writer = new MessagePackWriter(_buffer);
         writer.WriteArrayHeader(4);
+        decimal.GetBits(value, bits);
         writer.Write(bits[0]);
         writer.Write(bits[1]);
         writer.Write(bits[2]);
