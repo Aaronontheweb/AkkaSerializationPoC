@@ -129,9 +129,9 @@ internal sealed class MessagePackCodecReader : ICodecReader
         else
         {
             // Multi-segment sequence - need to copy to contiguous memory
-            byte[] guidBytes = new byte[16];
-            CopySequenceToArray(bytes.Value, guidBytes);
-            return new Guid(guidBytes);
+            Span<byte> span = stackalloc byte[16];
+            bytes.Value.CopyTo(span);
+            return new Guid(span);
         }
     }
 
