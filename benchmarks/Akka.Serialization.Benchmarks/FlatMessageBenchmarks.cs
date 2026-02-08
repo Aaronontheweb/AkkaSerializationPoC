@@ -124,6 +124,16 @@ public class FlatMessageBenchmarks
     }
 
     /// <summary>
+    /// MsgPackSerializer with BufferWriter: uses MessagePack's native buffer API with SerializerOptions.
+    /// </summary>
+    [Benchmark]
+    public ArrayBufferWriter<byte> MsgPackSerializer_Serialize_BufferWriter()
+    {
+        MessagePackSerializer.Serialize(_buffer, _message, _msgPackSerializer.SerializerOptions);
+        return _buffer;
+    }
+
+    /// <summary>
     /// V2 MessagePack serialization: write to pre-allocated buffer, no byte[] copy.
     /// </summary>
     [Benchmark]

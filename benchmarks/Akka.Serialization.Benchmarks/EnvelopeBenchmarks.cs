@@ -186,6 +186,16 @@ public class EnvelopeBenchmarks
     }
 
     /// <summary>
+    /// MsgPackSerializer with BufferWriter: uses MessagePack's native buffer API for 1-layer envelope.
+    /// </summary>
+    [Benchmark]
+    public ArrayBufferWriter<byte> MsgPackSerializer_1Layer_Serialize_BufferWriter()
+    {
+        MessagePackSerializer.Serialize(_buffer, _oneLayerEnvelope, _msgPackSerializer.SerializerOptions);
+        return _buffer;
+    }
+
+    /// <summary>
     /// V2 MessagePack pattern: 1-layer envelope.
     /// Single buffer, zero-copy nesting. Both envelope and inner write directly.
     /// </summary>
@@ -267,6 +277,16 @@ public class EnvelopeBenchmarks
     public byte[] MsgPackSerializer_3Layer_Serialize()
     {
         return _msgPackSerializer.ToBinary(_threeLayerEnvelope);
+    }
+
+    /// <summary>
+    /// MsgPackSerializer with BufferWriter: uses MessagePack's native buffer API for 3-layer envelope.
+    /// </summary>
+    [Benchmark]
+    public ArrayBufferWriter<byte> MsgPackSerializer_3Layer_Serialize_BufferWriter()
+    {
+        MessagePackSerializer.Serialize(_buffer, _threeLayerEnvelope, _msgPackSerializer.SerializerOptions);
+        return _buffer;
     }
 
     /// <summary>
