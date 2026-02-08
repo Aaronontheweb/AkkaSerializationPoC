@@ -477,8 +477,7 @@ do build-and-verify()
 do commit-milestone("Add benchmark scaffolding")
 
 # Run benchmarks
-let benchmark_results = session "Run benchmarks"
-  prompt: """
+let benchmark_results = session """
 Run the benchmarks in Release mode:
 dotnet run -c Release --project benchmarks/Akka.Serialization.Benchmarks/ -- --filter *
 
