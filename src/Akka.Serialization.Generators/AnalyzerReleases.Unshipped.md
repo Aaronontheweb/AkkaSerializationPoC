@@ -12,3 +12,6 @@ AKKA008 | Akka.Serialization | Warning | Orphaned serializable type (not covered
 AKKA009 | Akka.Serialization | Error | AkkaSerializer must specify either Name or SerializerId
 AKKA010 | Akka.Serialization | Error | Serializer ID collision between modules
 AKKA011 | Akka.Serialization | Info | Computed serializer ID from Name via FNV-1a
+AKKA012 | Akka.Serialization | Error | Circular reference in nested types
+AKKA013 | Akka.Serialization | Error | Dictionary key must be primitive or enum
+AKKA014 | Akka.Serialization | Error | Nested type missing [AkkaField]

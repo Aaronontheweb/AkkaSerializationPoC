@@ -73,6 +73,21 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         "[AkkaSerializer] class '{0}' with Name '{1}' has computed serializer ID {2}",
         "Akka.Serialization", DiagnosticSeverity.Info, isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor CircularReferenceDiagnostic = new DiagnosticDescriptor(
+        "AKKA012", "Circular reference in nested types",
+        "Type '{0}' has a circular reference through nested type chain",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor DictKeyUnsupportedDiagnostic = new DiagnosticDescriptor(
+        "AKKA013", "Dictionary key must be primitive or enum",
+        "Dictionary key type '{0}' on property '{1}' of type '{2}' must be a primitive type or enum",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor MissingAkkaFieldsDiagnostic = new DiagnosticDescriptor(
+        "AKKA014", "Nested type missing [AkkaField]",
+        "Type '{0}' is used as a field on '{1}' but has no [AkkaField] properties. Add [AkkaField] attributes to its properties to enable nested serialization.",
+        "Akka.Serialization", DiagnosticSeverity.Error, isEnabledByDefault: true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         // Step 1: Find all types with [AkkaSerializer]
@@ -286,6 +301,70 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
                         field.PropertyName, s.SimpleName, field.TypeMapping.CSharpType));
                 }
             }
+
+            // AKKA012: Circular references
+            ValidateFieldsDeeply(spc, s.SimpleName, s.Fields);
+        }
+    }
+
+    private static void ValidateFieldsDeeply(SourceProductionContext spc, string parentTypeName, FieldInfo[] fields)
+    {
+        foreach (var field in fields)
+        {
+            ValidateTypeMappingDeeply(spc, parentTypeName, field.PropertyName, field.TypeMapping);
+        }
+    }
+
+    private static void ValidateTypeMappingDeeply(SourceProductionContext spc, string parentTypeName, string propertyName, TypeMapping mapping)
+    {
+        if (mapping.WriteMethod == "/* CIRCULAR */")
+        {
+            spc.ReportDiagnostic(Diagnostic.Create(CircularReferenceDiagnostic, Location.None, mapping.CSharpType));
+        }
+        else if (mapping.WriteMethod == "/* MISSING_AKKA_FIELDS */")
+        {
+            spc.ReportDiagnostic(Diagnostic.Create(MissingAkkaFieldsDiagnostic, Location.None,
+                mapping.CSharpType, parentTypeName));
+        }
+
+        // Check collection element/key/value types
+        if (mapping.Kind == TypeMappingKind.Collection && mapping.Collection != null)
+        {
+            var coll = mapping.Collection;
+            if (coll.Kind == CollectionKind.Dictionary || coll.Kind == CollectionKind.ImmutableDictionary)
+            {
+                // AKKA013: Dictionary key must be primitive or enum
+                if (coll.KeyMapping != null
+                    && coll.KeyMapping.Kind != TypeMappingKind.Primitive
+                    && coll.KeyMapping.Kind != TypeMappingKind.Enum)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(DictKeyUnsupportedDiagnostic, Location.None,
+                        coll.KeyTypeFullName, propertyName, parentTypeName));
+                }
+                if (coll.ValueMapping != null)
+                {
+                    ValidateTypeMappingDeeply(spc, parentTypeName, propertyName, coll.ValueMapping);
+                }
+            }
+            else
+            {
+                if (coll.ElementMapping != null)
+                {
+                    ValidateTypeMappingDeeply(spc, parentTypeName, propertyName, coll.ElementMapping);
+                }
+            }
+        }
+
+        // Check nullable value inner type
+        if (mapping.Kind == TypeMappingKind.NullableValue && mapping.InnerMapping != null)
+        {
+            ValidateTypeMappingDeeply(spc, parentTypeName, propertyName, mapping.InnerMapping);
+        }
+
+        // Check nested object fields
+        if (mapping.Kind == TypeMappingKind.NestedObject && mapping.NestedType != null)
+        {
+            ValidateFieldsDeeply(spc, mapping.NestedType.SimpleName, mapping.NestedType.Fields);
         }
     }
 
@@ -475,6 +554,11 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
 
     private static TypeMapping GetTypeMapping(ITypeSymbol typeSymbol)
     {
+        return GetTypeMapping(typeSymbol, new HashSet<string>());
+    }
+
+    private static TypeMapping GetTypeMapping(ITypeSymbol typeSymbol, HashSet<string> visitedTypes)
+    {
         // Check for nullable reference type (e.g. string?)
         bool isNullableReference = typeSymbol.NullableAnnotation == NullableAnnotation.Annotated
             && !typeSymbol.IsValueType;
@@ -489,7 +573,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         var specialType = effectiveType.SpecialType;
         var fullName = effectiveType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
-        // Map types to write/read methods
+        // === Primitives (unchanged) ===
         if (specialType == SpecialType.System_String || fullName == "global::System.String" || fullName == "string")
         {
             if (isNullableReference)
@@ -551,17 +635,233 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         }
 
         // byte[] check
-        if (typeSymbol is IArrayTypeSymbol arrayType &&
-            arrayType.ElementType.SpecialType == SpecialType.System_Byte)
+        if (typeSymbol is IArrayTypeSymbol byteArrayType &&
+            byteArrayType.ElementType.SpecialType == SpecialType.System_Byte)
         {
-            return new TypeMapping("byte[]", "WriteBytes", "ReadBytes() ?? System.Array.Empty<byte>()",
-                isNullableReference: false, nullDefault: "System.Array.Empty<byte>()",
-                readExpression: "ReadBytes() ?? System.Array.Empty<byte>()");
+            return new TypeMapping("byte[]", "WriteBytes", "ReadBytes() ?? global::System.Array.Empty<byte>()",
+                isNullableReference: false, nullDefault: "global::System.Array.Empty<byte>()",
+                readExpression: "ReadBytes() ?? global::System.Array.Empty<byte>()");
+        }
+
+        // === Enums ===
+        if (effectiveType.TypeKind == TypeKind.Enum)
+        {
+            var enumFullName = fullName;
+            // Map underlying type to write/read methods
+            var namedType = (INamedTypeSymbol)effectiveType;
+            var underlyingType = namedType.EnumUnderlyingType;
+            string writeMethod = "WriteInt32";
+            string readMethod = "ReadInt32";
+            if (underlyingType != null)
+            {
+                switch (underlyingType.SpecialType)
+                {
+                    case SpecialType.System_Int64:
+                        writeMethod = "WriteInt64";
+                        readMethod = "ReadInt64";
+                        break;
+                    // byte, sbyte, short, ushort, uint all fit in Int32
+                }
+            }
+            return new TypeMapping(
+                TypeMappingKind.Enum,
+                enumFullName, writeMethod, readMethod,
+                isNullableReference: isNullableReference,
+                nullDefault: "default",
+                enumFullName: enumFullName);
+        }
+
+        // === Nullable<T> value type ===
+        if (effectiveType is INamedTypeSymbol nullableNamedType
+            && nullableNamedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+        {
+            var innerType = nullableNamedType.TypeArguments[0];
+            var innerMapping = GetTypeMapping(innerType, visitedTypes);
+            var innerFullName = innerType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            return new TypeMapping(
+                TypeMappingKind.NullableValue,
+                fullName, "/* NULLABLE_VALUE */", "/* NULLABLE_VALUE */",
+                isNullableReference: false,
+                nullDefault: "null",
+                innerMapping: innerMapping);
+        }
+
+        // === Collections ===
+        // T[] (non-byte arrays)
+        if (typeSymbol is IArrayTypeSymbol arrayType)
+        {
+            var elementMapping = GetTypeMapping(arrayType.ElementType, visitedTypes);
+            var elementFullName = arrayType.ElementType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            return new TypeMapping(
+                TypeMappingKind.Collection,
+                fullName, "/* COLLECTION */", "/* COLLECTION */",
+                isNullableReference: isNullableReference,
+                nullDefault: isNullableReference ? "null" : "global::System.Array.Empty<" + elementFullName + ">()",
+                collection: new CollectionInfo(CollectionKind.Array, elementMapping, elementFullName));
+        }
+
+        // Generic collections
+        if (effectiveType is INamedTypeSymbol namedTypeForCollection && namedTypeForCollection.IsGenericType)
+        {
+            var originalDef = namedTypeForCollection.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var collectionResult = TryMapCollection(originalDef, namedTypeForCollection, isNullableReference, fullName, visitedTypes);
+            if (collectionResult != null)
+                return collectionResult;
+        }
+
+        // === Nested objects ===
+        if (effectiveType is INamedTypeSymbol namedTypeForNested
+            && (namedTypeForNested.TypeKind == TypeKind.Class || namedTypeForNested.TypeKind == TypeKind.Struct))
+        {
+            // Check for circular reference
+            if (visitedTypes.Contains(fullName))
+            {
+                return new TypeMapping(fullName, "/* CIRCULAR */", "/* CIRCULAR */",
+                    isNullableReference: isNullableReference, nullDefault: "default");
+            }
+
+            // Check if type has [AkkaField] properties
+            var nestedFields = ExtractAkkaFields(namedTypeForNested, visitedTypes);
+            if (nestedFields.Count > 0)
+            {
+                // Check if type also has [AkkaSerializable]
+                bool isAkkaSerializable = HasAttribute(namedTypeForNested, SerializableAttributeFullName);
+                var nestedSimpleName = namedTypeForNested.Name;
+                var nestedInfo = new NestedTypeInfo(fullName, nestedSimpleName, nestedFields.ToArray(), isAkkaSerializable);
+
+                return new TypeMapping(
+                    TypeMappingKind.NestedObject,
+                    fullName, "/* NESTED */", "/* NESTED */",
+                    isNullableReference: isNullableReference,
+                    nullDefault: isNullableReference ? "null" : "default",
+                    nestedType: nestedInfo);
+            }
+
+            // Type is a non-primitive, non-enum, non-collection class/struct with no [AkkaField] properties
+            if (!effectiveType.IsAbstract && effectiveType.SpecialType == SpecialType.None)
+            {
+                return new TypeMapping(fullName, "/* MISSING_AKKA_FIELDS */", "/* MISSING_AKKA_FIELDS */",
+                    isNullableReference: isNullableReference, nullDefault: "default");
+            }
         }
 
         // Fallback - unsupported type
         return new TypeMapping(fullName, "/* UNSUPPORTED */", "/* UNSUPPORTED */",
             isNullableReference: false, nullDefault: "default");
+    }
+
+    private static TypeMapping TryMapCollection(
+        string originalDef,
+        INamedTypeSymbol namedType,
+        bool isNullableReference,
+        string fullName,
+        HashSet<string> visitedTypes)
+    {
+        CollectionKind? kind = null;
+        bool isDictionary = false;
+
+        switch (originalDef)
+        {
+            case "global::System.Collections.Generic.List<T>":
+                kind = CollectionKind.List;
+                break;
+            case "global::System.Collections.Generic.IReadOnlyList<T>":
+                kind = CollectionKind.IReadOnlyList;
+                break;
+            case "global::System.Collections.Immutable.ImmutableList<T>":
+                kind = CollectionKind.ImmutableList;
+                break;
+            case "global::System.Collections.Immutable.ImmutableArray<T>":
+                kind = CollectionKind.ImmutableArray;
+                break;
+            case "global::System.Collections.Generic.HashSet<T>":
+                kind = CollectionKind.HashSet;
+                break;
+            case "global::System.Collections.Generic.Dictionary<TKey, TValue>":
+                kind = CollectionKind.Dictionary;
+                isDictionary = true;
+                break;
+            case "global::System.Collections.Immutable.ImmutableDictionary<TKey, TValue>":
+                kind = CollectionKind.ImmutableDictionary;
+                isDictionary = true;
+                break;
+        }
+
+        if (kind == null) return null;
+
+        if (isDictionary)
+        {
+            var keyType = namedType.TypeArguments[0];
+            var valueType = namedType.TypeArguments[1];
+            var keyMapping = GetTypeMapping(keyType, visitedTypes);
+            var valueMapping = GetTypeMapping(valueType, visitedTypes);
+            var keyFullName = keyType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var valueFullName = valueType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+            return new TypeMapping(
+                TypeMappingKind.Collection,
+                fullName, "/* COLLECTION */", "/* COLLECTION */",
+                isNullableReference: isNullableReference,
+                nullDefault: isNullableReference ? "null" : "default!",
+                collection: new CollectionInfo(kind.Value, keyMapping, keyFullName, valueMapping, valueFullName));
+        }
+        else
+        {
+            var elementType = namedType.TypeArguments[0];
+            var elementMapping = GetTypeMapping(elementType, visitedTypes);
+            var elementFullName = elementType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+            return new TypeMapping(
+                TypeMappingKind.Collection,
+                fullName, "/* COLLECTION */", "/* COLLECTION */",
+                isNullableReference: isNullableReference,
+                nullDefault: isNullableReference ? "null" : "default!",
+                collection: new CollectionInfo(kind.Value, elementMapping, elementFullName));
+        }
+    }
+
+    private static List<FieldInfo> ExtractAkkaFields(INamedTypeSymbol typeSymbol, HashSet<string> visitedTypes)
+    {
+        var fullName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        visitedTypes.Add(fullName);
+
+        var fields = new List<FieldInfo>();
+        foreach (var member in typeSymbol.GetMembers())
+        {
+            if (member is IPropertySymbol prop)
+            {
+                foreach (var propAttr in prop.GetAttributes())
+                {
+                    var attrClass = propAttr.AttributeClass;
+                    if (attrClass != null && GetFullMetadataName(attrClass) == FieldAttributeFullName)
+                    {
+                        int index = 0;
+                        if (propAttr.ConstructorArguments.Length > 0 &&
+                            propAttr.ConstructorArguments[0].Value is int idx)
+                        {
+                            index = idx;
+                        }
+
+                        var typeInfo = GetTypeMapping(prop.Type, visitedTypes);
+                        fields.Add(new FieldInfo(prop.Name, index, typeInfo));
+                    }
+                }
+            }
+        }
+
+        visitedTypes.Remove(fullName);
+        fields.Sort((a, b) => a.Index.CompareTo(b.Index));
+        return fields;
+    }
+
+    private static bool HasAttribute(INamedTypeSymbol symbol, string attributeFullName)
+    {
+        foreach (var attr in symbol.GetAttributes())
+        {
+            if (attr.AttributeClass != null && GetFullMetadataName(attr.AttributeClass) == attributeFullName)
+                return true;
+        }
+        return false;
     }
 
     private static string GenerateSerializerCode(
@@ -620,6 +920,16 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
             }
         }
 
+        // Collect and generate nested type helper methods
+        var nestedTypes = CollectAllNestedTypes(serializables);
+        foreach (var nested in nestedTypes)
+        {
+            sb.AppendLine();
+            GenerateNestedWriteHelper(sb, nested);
+            sb.AppendLine();
+            GenerateNestedReadHelper(sb, nested);
+        }
+
         sb.AppendLine("}");
         sb.AppendLine();
 
@@ -627,6 +937,62 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         GenerateSerializerSetup(sb, module, serializables);
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Walks all fields recursively and collects unique nested types that need Write/Read helper methods.
+    /// Skips types that are [AkkaSerializable] (they already get top-level Write/Read methods).
+    /// </summary>
+    private static List<NestedTypeInfo> CollectAllNestedTypes(ImmutableArray<SerializableTypeInfo> serializables)
+    {
+        var result = new List<NestedTypeInfo>();
+        var seen = new HashSet<string>();
+
+        for (int i = 0; i < serializables.Length; i++)
+        {
+            if (serializables[i] == null) continue;
+            CollectNestedTypesFromFields(serializables[i].Fields, result, seen);
+        }
+
+        return result;
+    }
+
+    private static void CollectNestedTypesFromFields(FieldInfo[] fields, List<NestedTypeInfo> result, HashSet<string> seen)
+    {
+        foreach (var field in fields)
+        {
+            CollectNestedTypesFromMapping(field.TypeMapping, result, seen);
+        }
+    }
+
+    private static void CollectNestedTypesFromMapping(TypeMapping mapping, List<NestedTypeInfo> result, HashSet<string> seen)
+    {
+        if (mapping.Kind == TypeMappingKind.NestedObject && mapping.NestedType != null)
+        {
+            if (!mapping.NestedType.IsAkkaSerializable && seen.Add(mapping.NestedType.FullyQualifiedName))
+            {
+                result.Add(mapping.NestedType);
+                // Recurse into nested type's fields
+                CollectNestedTypesFromFields(mapping.NestedType.Fields, result, seen);
+            }
+        }
+        else if (mapping.Kind == TypeMappingKind.Collection && mapping.Collection != null)
+        {
+            var coll = mapping.Collection;
+            if (coll.Kind == CollectionKind.Dictionary || coll.Kind == CollectionKind.ImmutableDictionary)
+            {
+                if (coll.KeyMapping != null) CollectNestedTypesFromMapping(coll.KeyMapping, result, seen);
+                if (coll.ValueMapping != null) CollectNestedTypesFromMapping(coll.ValueMapping, result, seen);
+            }
+            else
+            {
+                if (coll.ElementMapping != null) CollectNestedTypesFromMapping(coll.ElementMapping, result, seen);
+            }
+        }
+        else if (mapping.Kind == TypeMappingKind.NullableValue && mapping.InnerMapping != null)
+        {
+            CollectNestedTypesFromMapping(mapping.InnerMapping, result, seen);
+        }
     }
 
     private static void GenerateSerializerSetup(
@@ -644,11 +1010,11 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         sb.AppendLine("    public static readonly " + setupClassName + " Instance = new();");
         sb.AppendLine();
 
-        sb.AppendLine("    public System.Type SerializerType => typeof(" + module.ClassName + ");");
+        sb.AppendLine("    public global::System.Type SerializerType => typeof(" + module.ClassName + ");");
         sb.AppendLine();
 
         // BoundTypes — emit typeof(TProtocol) (the interface) instead of individual concrete types
-        sb.AppendLine("    public static System.Type[] BoundTypes => new System.Type[]");
+        sb.AppendLine("    public static global::System.Type[] BoundTypes => new global::System.Type[]");
         sb.AppendLine("    {");
         if (!string.IsNullOrEmpty(module.ProtocolTypeFullName))
         {
@@ -673,7 +1039,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
             sb.AppendLine("        " + s.FullyQualifiedName + " => \"" + s.Manifest + "\",");
         }
 
-        sb.AppendLine("        _ => throw new System.ArgumentException($\"Unsupported type: {obj.GetType()}\", nameof(obj))");
+        sb.AppendLine("        _ => throw new global::System.ArgumentException($\"Unsupported type: {obj.GetType()}\", nameof(obj))");
         sb.AppendLine("    };");
     }
 
@@ -696,7 +1062,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         }
 
         sb.AppendLine("            default:");
-        sb.AppendLine("                throw new System.ArgumentException($\"Unsupported type: {obj.GetType()}\", nameof(obj));");
+        sb.AppendLine("                throw new global::System.ArgumentException($\"Unsupported type: {obj.GetType()}\", nameof(obj));");
         sb.AppendLine("        }");
         sb.AppendLine("    }");
     }
@@ -717,7 +1083,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
             sb.AppendLine("            \"" + s.Manifest + "\" => Read" + s.SimpleName + "(reader),");
         }
 
-        sb.AppendLine("            _ => throw new System.ArgumentException($\"Unknown manifest: {manifest}\", nameof(manifest))");
+        sb.AppendLine("            _ => throw new global::System.ArgumentException($\"Unknown manifest: {manifest}\", nameof(manifest))");
         sb.AppendLine("        };");
         sb.AppendLine("    }");
     }
@@ -733,25 +1099,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         for (int i = 0; i < type.Fields.Length; i++)
         {
             var field = type.Fields[i];
-            var mapping = field.TypeMapping;
-
-            if (mapping.IsNullableReference)
-            {
-                // Nullable reference type - check for null
-                sb.AppendLine("        if (msg." + field.PropertyName + " is null)");
-                sb.AppendLine("            writer.WriteNull();");
-                sb.AppendLine("        else");
-                sb.AppendLine("            writer." + mapping.WriteMethod + "(msg." + field.PropertyName + ");");
-            }
-            else if (mapping.WritePrefix != null)
-            {
-                // Types needing a cast (e.g., decimal -> double)
-                sb.AppendLine("        writer." + mapping.WriteMethod + "(" + mapping.WritePrefix + "msg." + field.PropertyName + ");");
-            }
-            else
-            {
-                sb.AppendLine("        writer." + mapping.WriteMethod + "(msg." + field.PropertyName + ");");
-            }
+            GenerateFieldWrite(sb, field.TypeMapping, "msg." + field.PropertyName, "        ", 0);
         }
 
         sb.AppendLine("    }");
@@ -765,36 +1113,17 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         sb.AppendLine("    {");
         sb.AppendLine("        var fieldCount = reader.BeginReadObject();");
 
-        // Generate local variables for each field with fieldCount guards for backward compat
         for (int i = 0; i < type.Fields.Length; i++)
         {
             var field = type.Fields[i];
             var mapping = field.TypeMapping;
             var varName = ToCamelCase(field.PropertyName);
 
-            if (mapping.IsNullableReference)
-            {
-                // Nullable reference - use TryReadNull, default to null if field missing
-                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? (reader.TryReadNull() ? null : reader." + mapping.ReadMethod + "()) : " + mapping.NullDefault + ";");
-            }
-            else if (mapping.ReadExpression != null)
-            {
-                // Custom read expression (e.g., ReadString() ?? string.Empty)
-                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? reader." + mapping.ReadExpression + " : " + mapping.NullDefault + ";");
-            }
-            else if (mapping.ReadPrefix != null)
-            {
-                // Types needing a cast on read
-                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? " + mapping.ReadPrefix + "reader." + mapping.ReadMethod + "() : " + mapping.NullDefault + ";");
-            }
-            else
-            {
-                sb.AppendLine("        var " + varName + " = fieldCount > " + i + " ? reader." + mapping.ReadMethod + "() : " + mapping.NullDefault + ";");
-            }
+            GenerateFieldRead(sb, mapping, varName, i, "fieldCount", "        ", 0);
         }
 
         // Skip unknown trailing fields
-        sb.AppendLine("        for (int i = " + type.Fields.Length + "; i < fieldCount; i++)");
+        sb.AppendLine("        for (int __skip = " + type.Fields.Length + "; __skip < fieldCount; __skip++)");
         sb.AppendLine("        {");
         sb.AppendLine("            reader.SkipField();");
         sb.AppendLine("        }");
@@ -809,6 +1138,637 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         sb.AppendLine(");");
 
         sb.AppendLine("    }");
+    }
+
+    private static void GenerateNestedWriteHelper(StringBuilder sb, NestedTypeInfo nested)
+    {
+        sb.AppendLine("    private void Write" + nested.SimpleName + "(Akka.Serialization.V2.ICodecWriter writer, " + nested.FullyQualifiedName + " msg)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        writer.BeginObject(" + nested.Fields.Length + ");");
+
+        for (int i = 0; i < nested.Fields.Length; i++)
+        {
+            var field = nested.Fields[i];
+            GenerateFieldWrite(sb, field.TypeMapping, "msg." + field.PropertyName, "        ", 0);
+        }
+
+        sb.AppendLine("    }");
+    }
+
+    private static void GenerateNestedReadHelper(StringBuilder sb, NestedTypeInfo nested)
+    {
+        sb.AppendLine("    private " + nested.FullyQualifiedName + " Read" + nested.SimpleName + "(Akka.Serialization.V2.ICodecReader reader)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        var fieldCount = reader.BeginReadObject();");
+
+        for (int i = 0; i < nested.Fields.Length; i++)
+        {
+            var field = nested.Fields[i];
+            var varName = ToCamelCase(field.PropertyName);
+            GenerateFieldRead(sb, field.TypeMapping, varName, i, "fieldCount", "        ", 0);
+        }
+
+        // Skip unknown trailing fields
+        sb.AppendLine("        for (int __skip = " + nested.Fields.Length + "; __skip < fieldCount; __skip++)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            reader.SkipField();");
+        sb.AppendLine("        }");
+
+        // Construct the object
+        sb.Append("        return new " + nested.FullyQualifiedName + "(");
+        for (int i = 0; i < nested.Fields.Length; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            sb.Append(ToCamelCase(nested.Fields[i].PropertyName));
+        }
+        sb.AppendLine(");");
+
+        sb.AppendLine("    }");
+    }
+
+    // =====================================================================
+    // Field-level write/read code generation — dispatches on TypeMappingKind
+    // =====================================================================
+
+    private static void GenerateFieldWrite(StringBuilder sb, TypeMapping mapping, string accessor, string indent, int depth)
+    {
+        switch (mapping.Kind)
+        {
+            case TypeMappingKind.Primitive:
+                GeneratePrimitiveWrite(sb, mapping, accessor, indent);
+                break;
+
+            case TypeMappingKind.Enum:
+                GenerateEnumWrite(sb, mapping, accessor, indent);
+                break;
+
+            case TypeMappingKind.NullableValue:
+                GenerateNullableValueWrite(sb, mapping, accessor, indent, depth);
+                break;
+
+            case TypeMappingKind.NestedObject:
+                GenerateNestedObjectWrite(sb, mapping, accessor, indent);
+                break;
+
+            case TypeMappingKind.Collection:
+                GenerateCollectionWrite(sb, mapping, accessor, indent, depth);
+                break;
+        }
+    }
+
+    private static void GeneratePrimitiveWrite(StringBuilder sb, TypeMapping mapping, string accessor, string indent)
+    {
+        if (mapping.IsNullableReference)
+        {
+            sb.AppendLine(indent + "if (" + accessor + " is null)");
+            sb.AppendLine(indent + "    writer.WriteNull();");
+            sb.AppendLine(indent + "else");
+            sb.AppendLine(indent + "    writer." + mapping.WriteMethod + "(" + accessor + ");");
+        }
+        else if (mapping.WritePrefix != null)
+        {
+            sb.AppendLine(indent + "writer." + mapping.WriteMethod + "(" + mapping.WritePrefix + accessor + ");");
+        }
+        else
+        {
+            sb.AppendLine(indent + "writer." + mapping.WriteMethod + "(" + accessor + ");");
+        }
+    }
+
+    private static void GenerateEnumWrite(StringBuilder sb, TypeMapping mapping, string accessor, string indent)
+    {
+        if (mapping.IsNullableReference)
+        {
+            sb.AppendLine(indent + "if (" + accessor + " is null)");
+            sb.AppendLine(indent + "    writer.WriteNull();");
+            sb.AppendLine(indent + "else");
+            sb.AppendLine(indent + "    writer." + mapping.WriteMethod + "((int)" + accessor + ");");
+        }
+        else
+        {
+            sb.AppendLine(indent + "writer." + mapping.WriteMethod + "((int)" + accessor + ");");
+        }
+    }
+
+    private static void GenerateNullableValueWrite(StringBuilder sb, TypeMapping mapping, string accessor, string indent, int depth)
+    {
+        sb.AppendLine(indent + "if (" + accessor + ".HasValue)");
+        sb.AppendLine(indent + "{");
+        // Write the inner value
+        var innerAccessor = accessor + ".Value";
+        GenerateFieldWrite(sb, mapping.InnerMapping, innerAccessor, indent + "    ", depth);
+        sb.AppendLine(indent + "}");
+        sb.AppendLine(indent + "else");
+        sb.AppendLine(indent + "{");
+        sb.AppendLine(indent + "    writer.WriteNull();");
+        sb.AppendLine(indent + "}");
+    }
+
+    private static void GenerateNestedObjectWrite(StringBuilder sb, TypeMapping mapping, string accessor, string indent)
+    {
+        if (mapping.IsNullableReference)
+        {
+            sb.AppendLine(indent + "if (" + accessor + " is null)");
+            sb.AppendLine(indent + "    writer.WriteNull();");
+            sb.AppendLine(indent + "else");
+            sb.AppendLine(indent + "    Write" + mapping.NestedType.SimpleName + "(writer, " + accessor + ");");
+        }
+        else
+        {
+            sb.AppendLine(indent + "Write" + mapping.NestedType.SimpleName + "(writer, " + accessor + ");");
+        }
+    }
+
+    private static void GenerateCollectionWrite(StringBuilder sb, TypeMapping mapping, string accessor, string indent, int depth)
+    {
+        var coll = mapping.Collection;
+        var depthStr = depth.ToString();
+
+        if (mapping.IsNullableReference)
+        {
+            sb.AppendLine(indent + "if (" + accessor + " is null)");
+            sb.AppendLine(indent + "{");
+            sb.AppendLine(indent + "    writer.WriteNull();");
+            sb.AppendLine(indent + "}");
+            sb.AppendLine(indent + "else");
+            sb.AppendLine(indent + "{");
+            GenerateCollectionWriteInner(sb, coll, accessor, indent + "    ", depth);
+            sb.AppendLine(indent + "}");
+        }
+        else
+        {
+            GenerateCollectionWriteInner(sb, coll, accessor, indent, depth);
+        }
+    }
+
+    private static void GenerateCollectionWriteInner(StringBuilder sb, CollectionInfo coll, string accessor, string indent, int depth)
+    {
+        var depthStr = depth.ToString();
+        bool isDictionary = coll.Kind == CollectionKind.Dictionary || coll.Kind == CollectionKind.ImmutableDictionary;
+
+        if (isDictionary)
+        {
+            sb.AppendLine(indent + "writer.BeginObject(" + accessor + ".Count);");
+            sb.AppendLine(indent + "foreach (var __kvp" + depthStr + " in " + accessor + ")");
+            sb.AppendLine(indent + "{");
+            sb.AppendLine(indent + "    writer.BeginObject(2);");
+            GenerateFieldWrite(sb, coll.KeyMapping, "__kvp" + depthStr + ".Key", indent + "    ", depth + 1);
+            GenerateFieldWrite(sb, coll.ValueMapping, "__kvp" + depthStr + ".Value", indent + "    ", depth + 1);
+            sb.AppendLine(indent + "}");
+        }
+        else
+        {
+            // For arrays and ImmutableArray use .Length, for everything else use .Count
+            string countAccessor;
+            if (coll.Kind == CollectionKind.Array || coll.Kind == CollectionKind.ImmutableArray)
+                countAccessor = accessor + ".Length";
+            else
+                countAccessor = accessor + ".Count";
+
+            sb.AppendLine(indent + "writer.BeginObject(" + countAccessor + ");");
+
+            if (coll.Kind == CollectionKind.Array)
+            {
+                sb.AppendLine(indent + "for (int __i" + depthStr + " = 0; __i" + depthStr + " < " + accessor + ".Length; __i" + depthStr + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldWrite(sb, coll.ElementMapping, accessor + "[__i" + depthStr + "]", indent + "    ", depth + 1);
+                sb.AppendLine(indent + "}");
+            }
+            else
+            {
+                sb.AppendLine(indent + "foreach (var __item" + depthStr + " in " + accessor + ")");
+                sb.AppendLine(indent + "{");
+                GenerateFieldWrite(sb, coll.ElementMapping, "__item" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "}");
+            }
+        }
+    }
+
+    private static void GenerateFieldRead(StringBuilder sb, TypeMapping mapping, string varName, int fieldIndex, string fieldCountVar, string indent, int depth)
+    {
+        switch (mapping.Kind)
+        {
+            case TypeMappingKind.Primitive:
+                GeneratePrimitiveRead(sb, mapping, varName, fieldIndex, fieldCountVar, indent);
+                break;
+
+            case TypeMappingKind.Enum:
+                GenerateEnumRead(sb, mapping, varName, fieldIndex, fieldCountVar, indent);
+                break;
+
+            case TypeMappingKind.NullableValue:
+                GenerateNullableValueRead(sb, mapping, varName, fieldIndex, fieldCountVar, indent, depth);
+                break;
+
+            case TypeMappingKind.NestedObject:
+                GenerateNestedObjectRead(sb, mapping, varName, fieldIndex, fieldCountVar, indent);
+                break;
+
+            case TypeMappingKind.Collection:
+                GenerateCollectionRead(sb, mapping, varName, fieldIndex, fieldCountVar, indent, depth);
+                break;
+
+            default:
+                // Unsupported — emit default
+                sb.AppendLine(indent + "var " + varName + " = " + mapping.NullDefault + ";");
+                break;
+        }
+    }
+
+    private static void GeneratePrimitiveRead(StringBuilder sb, TypeMapping mapping, string varName, int fieldIndex, string fieldCountVar, string indent)
+    {
+        if (mapping.IsNullableReference)
+        {
+            sb.AppendLine(indent + "var " + varName + " = " + fieldCountVar + " > " + fieldIndex + " ? (reader.TryReadNull() ? null : reader." + mapping.ReadMethod + "()) : " + mapping.NullDefault + ";");
+        }
+        else if (mapping.ReadExpression != null)
+        {
+            sb.AppendLine(indent + "var " + varName + " = " + fieldCountVar + " > " + fieldIndex + " ? reader." + mapping.ReadExpression + " : " + mapping.NullDefault + ";");
+        }
+        else if (mapping.ReadPrefix != null)
+        {
+            sb.AppendLine(indent + "var " + varName + " = " + fieldCountVar + " > " + fieldIndex + " ? " + mapping.ReadPrefix + "reader." + mapping.ReadMethod + "() : " + mapping.NullDefault + ";");
+        }
+        else
+        {
+            sb.AppendLine(indent + "var " + varName + " = " + fieldCountVar + " > " + fieldIndex + " ? reader." + mapping.ReadMethod + "() : " + mapping.NullDefault + ";");
+        }
+    }
+
+    private static void GenerateEnumRead(StringBuilder sb, TypeMapping mapping, string varName, int fieldIndex, string fieldCountVar, string indent)
+    {
+        sb.AppendLine(indent + "var " + varName + " = " + fieldCountVar + " > " + fieldIndex + " ? (" + mapping.EnumFullName + ")reader." + mapping.ReadMethod + "() : default;");
+    }
+
+    private static void GenerateNullableValueRead(StringBuilder sb, TypeMapping mapping, string varName, int fieldIndex, string fieldCountVar, string indent, int depth)
+    {
+        var innerMapping = mapping.InnerMapping;
+        sb.AppendLine(indent + mapping.CSharpType + " " + varName + " = null;");
+        sb.AppendLine(indent + "if (" + fieldCountVar + " > " + fieldIndex + ")");
+        sb.AppendLine(indent + "{");
+        sb.AppendLine(indent + "    if (!reader.TryReadNull())");
+        sb.AppendLine(indent + "    {");
+
+        // Read the inner value into a temp variable then assign
+        var tempVar = "__inner" + depth;
+        GenerateFieldReadInline(sb, innerMapping, tempVar, indent + "        ", depth + 1);
+        sb.AppendLine(indent + "        " + varName + " = " + tempVar + ";");
+
+        sb.AppendLine(indent + "    }");
+        sb.AppendLine(indent + "}");
+    }
+
+    private static void GenerateNestedObjectRead(StringBuilder sb, TypeMapping mapping, string varName, int fieldIndex, string fieldCountVar, string indent)
+    {
+        if (mapping.IsNullableReference)
+        {
+            sb.AppendLine(indent + "var " + varName + " = " + fieldCountVar + " > " + fieldIndex + " ? (reader.TryReadNull() ? null : Read" + mapping.NestedType.SimpleName + "(reader)) : " + mapping.NullDefault + ";");
+        }
+        else
+        {
+            sb.AppendLine(indent + "var " + varName + " = " + fieldCountVar + " > " + fieldIndex + " ? Read" + mapping.NestedType.SimpleName + "(reader) : " + mapping.NullDefault + "!;");
+        }
+    }
+
+    private static void GenerateCollectionRead(StringBuilder sb, TypeMapping mapping, string varName, int fieldIndex, string fieldCountVar, string indent, int depth)
+    {
+        var coll = mapping.Collection;
+        bool isDictionary = coll.Kind == CollectionKind.Dictionary || coll.Kind == CollectionKind.ImmutableDictionary;
+
+        if (mapping.IsNullableReference)
+        {
+            // Declare variable, then check
+            sb.AppendLine(indent + mapping.CSharpType + "? " + varName + " = " + mapping.NullDefault + ";");
+            sb.AppendLine(indent + "if (" + fieldCountVar + " > " + fieldIndex + ")");
+            sb.AppendLine(indent + "{");
+            sb.AppendLine(indent + "    if (!reader.TryReadNull())");
+            sb.AppendLine(indent + "    {");
+            GenerateCollectionReadInner(sb, coll, varName, indent + "        ", depth);
+            sb.AppendLine(indent + "    }");
+            sb.AppendLine(indent + "}");
+        }
+        else
+        {
+            sb.AppendLine(indent + GenerateCollectionTypeDecl(coll) + " " + varName + " = " + mapping.NullDefault + ";");
+            sb.AppendLine(indent + "if (" + fieldCountVar + " > " + fieldIndex + ")");
+            sb.AppendLine(indent + "{");
+            GenerateCollectionReadInner(sb, coll, varName, indent + "    ", depth);
+            sb.AppendLine(indent + "}");
+        }
+    }
+
+    private static string GenerateCollectionTypeDecl(CollectionInfo coll)
+    {
+        bool isDictionary = coll.Kind == CollectionKind.Dictionary || coll.Kind == CollectionKind.ImmutableDictionary;
+        if (isDictionary)
+        {
+            switch (coll.Kind)
+            {
+                case CollectionKind.Dictionary:
+                    return "global::System.Collections.Generic.Dictionary<" + coll.KeyTypeFullName + ", " + coll.ValueTypeFullName + ">";
+                case CollectionKind.ImmutableDictionary:
+                    return "global::System.Collections.Immutable.ImmutableDictionary<" + coll.KeyTypeFullName + ", " + coll.ValueTypeFullName + ">";
+                default: return "object";
+            }
+        }
+        switch (coll.Kind)
+        {
+            case CollectionKind.Array:
+                return coll.ElementTypeFullName + "[]";
+            case CollectionKind.List:
+                return "global::System.Collections.Generic.List<" + coll.ElementTypeFullName + ">";
+            case CollectionKind.IReadOnlyList:
+                return "global::System.Collections.Generic.IReadOnlyList<" + coll.ElementTypeFullName + ">";
+            case CollectionKind.ImmutableList:
+                return "global::System.Collections.Immutable.ImmutableList<" + coll.ElementTypeFullName + ">";
+            case CollectionKind.ImmutableArray:
+                return "global::System.Collections.Immutable.ImmutableArray<" + coll.ElementTypeFullName + ">";
+            case CollectionKind.HashSet:
+                return "global::System.Collections.Generic.HashSet<" + coll.ElementTypeFullName + ">";
+            default: return "object";
+        }
+    }
+
+    private static void GenerateCollectionReadInner(StringBuilder sb, CollectionInfo coll, string varName, string indent, int depth)
+    {
+        var depthStr = depth.ToString();
+        bool isDictionary = coll.Kind == CollectionKind.Dictionary || coll.Kind == CollectionKind.ImmutableDictionary;
+
+        sb.AppendLine(indent + "var __count" + depthStr + " = reader.BeginReadObject();");
+
+        if (isDictionary)
+        {
+            GenerateDictionaryReadInner(sb, coll, varName, indent, depth);
+        }
+        else
+        {
+            GenerateSequenceReadInner(sb, coll, varName, indent, depth);
+        }
+    }
+
+    private static void GenerateDictionaryReadInner(StringBuilder sb, CollectionInfo coll, string varName, string indent, int depth)
+    {
+        var depthStr = depth.ToString();
+        var countVar = "__count" + depthStr;
+        var iVar = "__i" + depthStr;
+
+        switch (coll.Kind)
+        {
+            case CollectionKind.Dictionary:
+                sb.AppendLine(indent + "var __builder" + depthStr + " = new global::System.Collections.Generic.Dictionary<" + coll.KeyTypeFullName + ", " + coll.ValueTypeFullName + ">(" + countVar + ");");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                sb.AppendLine(indent + "    reader.BeginReadObject();");
+                GenerateFieldReadInline(sb, coll.KeyMapping, "__key" + depthStr, indent + "    ", depth + 1);
+                GenerateFieldReadInline(sb, coll.ValueMapping, "__val" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __builder" + depthStr + ".Add(__key" + depthStr + ", __val" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __builder" + depthStr + ";");
+                break;
+
+            case CollectionKind.ImmutableDictionary:
+                sb.AppendLine(indent + "var __builder" + depthStr + " = global::System.Collections.Immutable.ImmutableDictionary.CreateBuilder<" + coll.KeyTypeFullName + ", " + coll.ValueTypeFullName + ">();");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                sb.AppendLine(indent + "    reader.BeginReadObject();");
+                GenerateFieldReadInline(sb, coll.KeyMapping, "__key" + depthStr, indent + "    ", depth + 1);
+                GenerateFieldReadInline(sb, coll.ValueMapping, "__val" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __builder" + depthStr + ".Add(__key" + depthStr + ", __val" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __builder" + depthStr + ".ToImmutable();");
+                break;
+        }
+    }
+
+    private static void GenerateSequenceReadInner(StringBuilder sb, CollectionInfo coll, string varName, string indent, int depth)
+    {
+        var depthStr = depth.ToString();
+        var countVar = "__count" + depthStr;
+        var iVar = "__i" + depthStr;
+
+        switch (coll.Kind)
+        {
+            case CollectionKind.Array:
+                sb.AppendLine(indent + "var __arr" + depthStr + " = new " + coll.ElementTypeFullName + "[" + countVar + "];");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __arr" + depthStr + "[" + iVar + "] = __elem" + depthStr + ";");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __arr" + depthStr + ";");
+                break;
+
+            case CollectionKind.List:
+                sb.AppendLine(indent + "var __list" + depthStr + " = new global::System.Collections.Generic.List<" + coll.ElementTypeFullName + ">(" + countVar + ");");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __list" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __list" + depthStr + ";");
+                break;
+
+            case CollectionKind.IReadOnlyList:
+                // Use array (implements IReadOnlyList<T>)
+                sb.AppendLine(indent + "var __arr" + depthStr + " = new " + coll.ElementTypeFullName + "[" + countVar + "];");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __arr" + depthStr + "[" + iVar + "] = __elem" + depthStr + ";");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __arr" + depthStr + ";");
+                break;
+
+            case CollectionKind.ImmutableList:
+                sb.AppendLine(indent + "var __builder" + depthStr + " = global::System.Collections.Immutable.ImmutableList.CreateBuilder<" + coll.ElementTypeFullName + ">();");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __builder" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __builder" + depthStr + ".ToImmutable();");
+                break;
+
+            case CollectionKind.ImmutableArray:
+                sb.AppendLine(indent + "var __builder" + depthStr + " = global::System.Collections.Immutable.ImmutableArray.CreateBuilder<" + coll.ElementTypeFullName + ">(" + countVar + ");");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __builder" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __builder" + depthStr + ".MoveToImmutable();");
+                break;
+
+            case CollectionKind.HashSet:
+                sb.AppendLine(indent + "var __set" + depthStr + " = new global::System.Collections.Generic.HashSet<" + coll.ElementTypeFullName + ">(" + countVar + ");");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __set" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + varName + " = __set" + depthStr + ";");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Generates an inline read expression for use inside collection loops and nullable value reads.
+    /// This creates a variable declaration directly (no fieldCount guard needed).
+    /// </summary>
+    private static void GenerateFieldReadInline(StringBuilder sb, TypeMapping mapping, string varName, string indent, int depth)
+    {
+        switch (mapping.Kind)
+        {
+            case TypeMappingKind.Primitive:
+                if (mapping.IsNullableReference)
+                {
+                    sb.AppendLine(indent + "var " + varName + " = reader.TryReadNull() ? null : reader." + mapping.ReadMethod + "();");
+                }
+                else if (mapping.ReadExpression != null)
+                {
+                    sb.AppendLine(indent + "var " + varName + " = reader." + mapping.ReadExpression + ";");
+                }
+                else
+                {
+                    sb.AppendLine(indent + "var " + varName + " = reader." + mapping.ReadMethod + "();");
+                }
+                break;
+
+            case TypeMappingKind.Enum:
+                sb.AppendLine(indent + "var " + varName + " = (" + mapping.EnumFullName + ")reader." + mapping.ReadMethod + "();");
+                break;
+
+            case TypeMappingKind.NullableValue:
+                sb.AppendLine(indent + mapping.CSharpType + " " + varName + " = null;");
+                sb.AppendLine(indent + "if (!reader.TryReadNull())");
+                sb.AppendLine(indent + "{");
+                var innerTemp = "__nv" + depth;
+                GenerateFieldReadInline(sb, mapping.InnerMapping, innerTemp, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    " + varName + " = " + innerTemp + ";");
+                sb.AppendLine(indent + "}");
+                break;
+
+            case TypeMappingKind.NestedObject:
+                if (mapping.IsNullableReference)
+                {
+                    sb.AppendLine(indent + "var " + varName + " = reader.TryReadNull() ? null : Read" + mapping.NestedType.SimpleName + "(reader);");
+                }
+                else
+                {
+                    sb.AppendLine(indent + "var " + varName + " = Read" + mapping.NestedType.SimpleName + "(reader);");
+                }
+                break;
+
+            case TypeMappingKind.Collection:
+                // For inline collection reads, build into a temp then assign
+                GenerateCollectionReadInline(sb, mapping, varName, indent, depth);
+                break;
+
+            default:
+                sb.AppendLine(indent + "var " + varName + " = default;");
+                break;
+        }
+    }
+
+    private static void GenerateCollectionReadInline(StringBuilder sb, TypeMapping mapping, string varName, string indent, int depth)
+    {
+        var coll = mapping.Collection;
+        var depthStr = depth.ToString();
+
+        sb.AppendLine(indent + "var __count" + depthStr + " = reader.BeginReadObject();");
+
+        bool isDictionary = coll.Kind == CollectionKind.Dictionary || coll.Kind == CollectionKind.ImmutableDictionary;
+        if (isDictionary)
+        {
+            // Inline dictionary read
+            var iVar = "__i" + depthStr;
+            switch (coll.Kind)
+            {
+                case CollectionKind.Dictionary:
+                    sb.AppendLine(indent + "var __builder" + depthStr + " = new global::System.Collections.Generic.Dictionary<" + coll.KeyTypeFullName + ", " + coll.ValueTypeFullName + ">(__count" + depthStr + ");");
+                    break;
+                case CollectionKind.ImmutableDictionary:
+                    sb.AppendLine(indent + "var __builder" + depthStr + " = global::System.Collections.Immutable.ImmutableDictionary.CreateBuilder<" + coll.KeyTypeFullName + ", " + coll.ValueTypeFullName + ">();");
+                    break;
+            }
+            sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < __count" + depthStr + "; " + iVar + "++)");
+            sb.AppendLine(indent + "{");
+            sb.AppendLine(indent + "    reader.BeginReadObject();");
+            GenerateFieldReadInline(sb, coll.KeyMapping, "__key" + depthStr, indent + "    ", depth + 1);
+            GenerateFieldReadInline(sb, coll.ValueMapping, "__val" + depthStr, indent + "    ", depth + 1);
+            sb.AppendLine(indent + "    __builder" + depthStr + ".Add(__key" + depthStr + ", __val" + depthStr + ");");
+            sb.AppendLine(indent + "}");
+
+            if (coll.Kind == CollectionKind.ImmutableDictionary)
+                sb.AppendLine(indent + "var " + varName + " = __builder" + depthStr + ".ToImmutable();");
+            else
+                sb.AppendLine(indent + "var " + varName + " = __builder" + depthStr + ";");
+        }
+        else
+        {
+            GenerateSequenceReadInline(sb, coll, varName, indent, depth);
+        }
+    }
+
+    private static void GenerateSequenceReadInline(StringBuilder sb, CollectionInfo coll, string varName, string indent, int depth)
+    {
+        var depthStr = depth.ToString();
+        var countVar = "__count" + depthStr;
+        var iVar = "__i" + depthStr;
+
+        switch (coll.Kind)
+        {
+            case CollectionKind.Array:
+            case CollectionKind.IReadOnlyList:
+                sb.AppendLine(indent + "var __arr" + depthStr + " = new " + coll.ElementTypeFullName + "[" + countVar + "];");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __arr" + depthStr + "[" + iVar + "] = __elem" + depthStr + ";");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + "var " + varName + " = __arr" + depthStr + ";");
+                break;
+
+            case CollectionKind.List:
+                sb.AppendLine(indent + "var __list" + depthStr + " = new global::System.Collections.Generic.List<" + coll.ElementTypeFullName + ">(" + countVar + ");");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __list" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + "var " + varName + " = __list" + depthStr + ";");
+                break;
+
+            case CollectionKind.ImmutableList:
+                sb.AppendLine(indent + "var __builder" + depthStr + " = global::System.Collections.Immutable.ImmutableList.CreateBuilder<" + coll.ElementTypeFullName + ">();");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __builder" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + "var " + varName + " = __builder" + depthStr + ".ToImmutable();");
+                break;
+
+            case CollectionKind.ImmutableArray:
+                sb.AppendLine(indent + "var __builder" + depthStr + " = global::System.Collections.Immutable.ImmutableArray.CreateBuilder<" + coll.ElementTypeFullName + ">(" + countVar + ");");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __builder" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + "var " + varName + " = __builder" + depthStr + ".MoveToImmutable();");
+                break;
+
+            case CollectionKind.HashSet:
+                sb.AppendLine(indent + "var __set" + depthStr + " = new global::System.Collections.Generic.HashSet<" + coll.ElementTypeFullName + ">(" + countVar + ");");
+                sb.AppendLine(indent + "for (int " + iVar + " = 0; " + iVar + " < " + countVar + "; " + iVar + "++)");
+                sb.AppendLine(indent + "{");
+                GenerateFieldReadInline(sb, coll.ElementMapping, "__elem" + depthStr, indent + "    ", depth + 1);
+                sb.AppendLine(indent + "    __set" + depthStr + ".Add(__elem" + depthStr + ");");
+                sb.AppendLine(indent + "}");
+                sb.AppendLine(indent + "var " + varName + " = __set" + depthStr + ";");
+                break;
+        }
     }
 
     /// <summary>
@@ -1033,6 +1993,111 @@ internal sealed class FieldInfo : IEquatable<FieldInfo>
     }
 }
 
+internal enum TypeMappingKind { Primitive, Enum, NestedObject, Collection, NullableValue, Unsupported }
+internal enum CollectionKind { Array, List, IReadOnlyList, ImmutableList, ImmutableArray, HashSet, Dictionary, ImmutableDictionary }
+
+internal sealed class NestedTypeInfo : IEquatable<NestedTypeInfo>
+{
+    public string FullyQualifiedName { get; }
+    public string SimpleName { get; }
+    public FieldInfo[] Fields { get; }
+    public bool IsAkkaSerializable { get; }
+
+    public NestedTypeInfo(string fullyQualifiedName, string simpleName, FieldInfo[] fields, bool isAkkaSerializable)
+    {
+        FullyQualifiedName = fullyQualifiedName;
+        SimpleName = simpleName;
+        Fields = fields;
+        IsAkkaSerializable = isAkkaSerializable;
+    }
+
+    public bool Equals(NestedTypeInfo other)
+    {
+        if (other == null) return false;
+        if (FullyQualifiedName != other.FullyQualifiedName
+            || SimpleName != other.SimpleName
+            || IsAkkaSerializable != other.IsAkkaSerializable
+            || Fields.Length != other.Fields.Length)
+            return false;
+        for (int i = 0; i < Fields.Length; i++)
+        {
+            if (!Fields[i].Equals(other.Fields[i]))
+                return false;
+        }
+        return true;
+    }
+
+    public override bool Equals(object obj) => Equals(obj as NestedTypeInfo);
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + (FullyQualifiedName != null ? FullyQualifiedName.GetHashCode() : 0);
+            hash = hash * 31 + (SimpleName != null ? SimpleName.GetHashCode() : 0);
+            hash = hash * 31 + IsAkkaSerializable.GetHashCode();
+            hash = hash * 31 + Fields.Length.GetHashCode();
+            return hash;
+        }
+    }
+}
+
+internal sealed class CollectionInfo : IEquatable<CollectionInfo>
+{
+    public CollectionKind Kind { get; }
+    public TypeMapping ElementMapping { get; }
+    public string ElementTypeFullName { get; }
+    // For dictionaries
+    public TypeMapping KeyMapping { get; }
+    public string KeyTypeFullName { get; }
+    public TypeMapping ValueMapping { get; }
+    public string ValueTypeFullName { get; }
+
+    public CollectionInfo(CollectionKind kind, TypeMapping elementMapping, string elementTypeFullName)
+    {
+        Kind = kind;
+        ElementMapping = elementMapping;
+        ElementTypeFullName = elementTypeFullName;
+    }
+
+    public CollectionInfo(CollectionKind kind, TypeMapping keyMapping, string keyTypeFullName,
+        TypeMapping valueMapping, string valueTypeFullName)
+    {
+        Kind = kind;
+        KeyMapping = keyMapping;
+        KeyTypeFullName = keyTypeFullName;
+        ValueMapping = valueMapping;
+        ValueTypeFullName = valueTypeFullName;
+    }
+
+    public bool Equals(CollectionInfo other)
+    {
+        if (other == null) return false;
+        if (Kind != other.Kind) return false;
+        if (!Equals(ElementMapping, other.ElementMapping)) return false;
+        if (ElementTypeFullName != other.ElementTypeFullName) return false;
+        if (!Equals(KeyMapping, other.KeyMapping)) return false;
+        if (KeyTypeFullName != other.KeyTypeFullName) return false;
+        if (!Equals(ValueMapping, other.ValueMapping)) return false;
+        if (ValueTypeFullName != other.ValueTypeFullName) return false;
+        return true;
+    }
+
+    public override bool Equals(object obj) => Equals(obj as CollectionInfo);
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + Kind.GetHashCode();
+            hash = hash * 31 + (ElementTypeFullName != null ? ElementTypeFullName.GetHashCode() : 0);
+            hash = hash * 31 + (KeyTypeFullName != null ? KeyTypeFullName.GetHashCode() : 0);
+            hash = hash * 31 + (ValueTypeFullName != null ? ValueTypeFullName.GetHashCode() : 0);
+            return hash;
+        }
+    }
+}
+
 internal sealed class TypeMapping : IEquatable<TypeMapping>
 {
     public string CSharpType { get; }
@@ -1043,7 +2108,13 @@ internal sealed class TypeMapping : IEquatable<TypeMapping>
     public string WritePrefix { get; }
     public string ReadPrefix { get; }
     public string ReadExpression { get; }
+    public TypeMappingKind Kind { get; }
+    public NestedTypeInfo NestedType { get; }
+    public CollectionInfo Collection { get; }
+    public TypeMapping InnerMapping { get; }
+    public string EnumFullName { get; }
 
+    // Primitive constructor (backward compat)
     public TypeMapping(
         string csharpType,
         string writeMethod,
@@ -1062,6 +2133,38 @@ internal sealed class TypeMapping : IEquatable<TypeMapping>
         WritePrefix = writePrefix;
         ReadPrefix = readPrefix;
         ReadExpression = readExpression;
+        Kind = TypeMappingKind.Primitive;
+    }
+
+    // Full constructor for all kinds
+    public TypeMapping(
+        TypeMappingKind kind,
+        string csharpType,
+        string writeMethod,
+        string readMethod,
+        bool isNullableReference,
+        string nullDefault,
+        string writePrefix = null,
+        string readPrefix = null,
+        string readExpression = null,
+        NestedTypeInfo nestedType = null,
+        CollectionInfo collection = null,
+        TypeMapping innerMapping = null,
+        string enumFullName = null)
+    {
+        Kind = kind;
+        CSharpType = csharpType;
+        WriteMethod = writeMethod;
+        ReadMethod = readMethod;
+        IsNullableReference = isNullableReference;
+        NullDefault = nullDefault;
+        WritePrefix = writePrefix;
+        ReadPrefix = readPrefix;
+        ReadExpression = readExpression;
+        NestedType = nestedType;
+        Collection = collection;
+        InnerMapping = innerMapping;
+        EnumFullName = enumFullName;
     }
 
     public bool Equals(TypeMapping other)
@@ -1074,7 +2177,12 @@ internal sealed class TypeMapping : IEquatable<TypeMapping>
             && NullDefault == other.NullDefault
             && WritePrefix == other.WritePrefix
             && ReadPrefix == other.ReadPrefix
-            && ReadExpression == other.ReadExpression;
+            && ReadExpression == other.ReadExpression
+            && Kind == other.Kind
+            && Equals(NestedType, other.NestedType)
+            && Equals(Collection, other.Collection)
+            && Equals(InnerMapping, other.InnerMapping)
+            && EnumFullName == other.EnumFullName;
     }
 
     public override bool Equals(object obj) => Equals(obj as TypeMapping);
@@ -1087,6 +2195,7 @@ internal sealed class TypeMapping : IEquatable<TypeMapping>
             hash = hash * 31 + (WriteMethod != null ? WriteMethod.GetHashCode() : 0);
             hash = hash * 31 + (ReadMethod != null ? ReadMethod.GetHashCode() : 0);
             hash = hash * 31 + IsNullableReference.GetHashCode();
+            hash = hash * 31 + Kind.GetHashCode();
             return hash;
         }
     }

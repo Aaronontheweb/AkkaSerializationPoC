@@ -182,6 +182,8 @@ If a newer serializer writes more fields than the reader knows about, the extra 
 
 ## Supported Types
 
+### Primitives
+
 | C# Type | Writer/Reader Method | Notes |
 |---------|---------------------|-------|
 | `string` | `WriteString`/`ReadString` | Non-nullable defaults to `string.Empty` |
@@ -196,7 +198,94 @@ If a newer serializer writes more fields than the reader knows about, the extra 
 | `Guid` | `WriteGuid`/`ReadGuid` | |
 | `byte[]` | `WriteBytes`/`ReadBytes` | |
 
-Unsupported types (collections, custom classes, etc.) produce a compile-time error (AKKA003).
+### Enums
+
+Enums are serialized as their underlying integer type (cast to `int` by default, `long` for `long`-backed enums):
+
+```csharp
+public enum OrderStatus { Pending, Confirmed, Shipped, Delivered, Cancelled }
+
+[AkkaSerializable(Manifest = "order-v1")]
+public sealed record Order(
+    [property: AkkaField(0)] string OrderId,
+    [property: AkkaField(1)] OrderStatus Status) : IMyProtocol;
+```
+
+Generated write: `writer.WriteInt32((int)msg.Status);`
+Generated read: `(OrderStatus)reader.ReadInt32()`
+
+### Nested Types (Value Objects)
+
+Types with `[AkkaField]` properties can be embedded as fields in other types — even without `[AkkaSerializable]`. The generator discovers embeddable types automatically by checking if a field's type has `[AkkaField]` properties:
+
+```csharp
+// Value object — not a standalone message, just embeddable
+public sealed record Address(
+    [property: AkkaField(0)] string Street,
+    [property: AkkaField(1)] string City,
+    [property: AkkaField(2)] string State,
+    [property: AkkaField(3)] string ZipCode,
+    [property: AkkaField(4)] Country Country);
+
+// Protocol message that uses the value object
+[AkkaSerializable(Manifest = "order-submitted-v1")]
+public sealed record OrderSubmitted(
+    [property: AkkaField(0)] string OrderId,
+    [property: AkkaField(1)] Address ShippingAddress,   // nested value object
+    [property: AkkaField(2)] Address? BillingAddress     // nullable nested value object
+) : IMyProtocol;
+```
+
+The generator creates `WriteAddress`/`ReadAddress` helper methods and calls them from the parent's write/read methods. Multi-level nesting is supported (e.g., `OrderSubmitted` → `LineItem` → `Money`).
+
+**`[AkkaSerializable]` types as nested fields:** Types that have both `[AkkaSerializable]` and `[AkkaField]` attributes can also be used as nested fields. Their existing `Write`/`Read` methods are reused — no duplicate helpers are generated.
+
+**Nullable nested objects:** Use `Address?` (nullable reference) for optional nested objects. The generator writes `WriteNull()` for null values and uses `TryReadNull()` on read.
+
+### Nullable Value Types
+
+`Nullable<T>` value types (e.g., `int?`, `DateTime?`, `OrderStatus?`) are supported. The generator writes `WriteNull()` for null and the inner type's writer for non-null values:
+
+```csharp
+[AkkaSerializable(Manifest = "event-v1")]
+public sealed record SomeEvent(
+    [property: AkkaField(0)] int? OptionalCount,
+    [property: AkkaField(1)] OrderStatus? OptionalStatus) : IMyProtocol;
+```
+
+### Collections
+
+The following collection types are supported, with elements of any supported type (including nested objects and other collections):
+
+| C# Type | Wire Format | Read Construction |
+|---------|-------------|-------------------|
+| `T[]` | Array of elements | `new T[count]` |
+| `List<T>` | Array of elements | `new List<T>(count)` + `.Add()` |
+| `IReadOnlyList<T>` | Array of elements | `new T[count]` (array implements IReadOnlyList) |
+| `ImmutableList<T>` | Array of elements | `ImmutableList.CreateBuilder<T>()` + `.ToImmutable()` |
+| `ImmutableArray<T>` | Array of elements | `ImmutableArray.CreateBuilder<T>(count)` + `.MoveToImmutable()` |
+| `HashSet<T>` | Array of elements | `new HashSet<T>(count)` + `.Add()` |
+| `Dictionary<K,V>` | Array of key-value pairs | `new Dictionary<K,V>(count)` + `.Add()` |
+| `ImmutableDictionary<K,V>` | Array of key-value pairs | Builder + `.ToImmutable()` |
+
+**Dictionary key constraint:** Dictionary keys must be primitive types or enums. Complex type keys produce AKKA013.
+
+**Wire format:** Collections use `BeginObject(count)` followed by individual element writes. Dictionaries write each entry as `BeginObject(2)` + key + value.
+
+```csharp
+[AkkaSerializable(Manifest = "catalog-v1")]
+public sealed record CatalogSnapshot(
+    [property: AkkaField(0)] string CatalogId,
+    [property: AkkaField(1)] IReadOnlyList<string> Categories,
+    [property: AkkaField(2)] ImmutableList<LineItem> FeaturedItems,
+    [property: AkkaField(3)] Dictionary<string, Money> PriceOverrides,
+    [property: AkkaField(4)] HashSet<string> Tags,
+    [property: AkkaField(5)] ImmutableArray<int> PopularItemRanks,
+    [property: AkkaField(6)] ImmutableDictionary<string, string> Metadata
+) : IMyProtocol;
+```
+
+Unsupported types produce a compile-time error (AKKA003). Types that are non-primitive and non-collection but missing `[AkkaField]` properties produce AKKA014.
 
 ## Diagnostics
 
@@ -214,6 +303,9 @@ The generator reports compile-time diagnostics:
 | AKKA009 | Error | `[AkkaSerializer]` must specify either `Name` or `SerializerId` |
 | AKKA010 | Error | Serializer ID collision between multiple `[AkkaSerializer]` modules |
 | AKKA011 | Info | Computed serializer ID from `Name` via FNV-1a (informational) |
+| AKKA012 | Error | Circular reference in nested type chain |
+| AKKA013 | Error | Dictionary key must be a primitive type or enum |
+| AKKA014 | Error | Type used as field has no `[AkkaField]` properties — add attributes to enable nested serialization |
 
 ## Generated Code
 
@@ -324,9 +416,9 @@ registry.Register(serializer, typeof(IMyProtocol));
 // instead of: registry.Register(serializer, typeof(UserCreated), typeof(OrderPlaced), ...);
 ```
 
-## Nested Types
+## C# Nested Types (Inner Classes)
 
-The generator handles types nested inside other classes:
+The generator handles types nested inside other classes (C# nested types):
 
 ```csharp
 public class MyActor
