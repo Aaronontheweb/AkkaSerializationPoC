@@ -3,6 +3,7 @@ using Akka.Actor;
 using Akka.Serialization.MessagePack;
 using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
+using Akka.Util.Internal;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Jobs;
 using MessagePack;
@@ -10,11 +11,12 @@ using MessagePack;
 namespace Akka.Serialization.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing three envelope serialization approaches:
+/// Benchmarks comparing four envelope serialization approaches:
 ///
 /// 1. Newtonsoft.Json (Akka.NET default) — inner message via ToBinary() -> byte[], embedded as blob
 /// 2. V1 MessagePack (ToBinary() -> byte[]) — same wire format as V2, but each layer allocates byte[]
-/// 3. V2 MessagePack (ICodecWriter on shared buffer) — single buffer, zero-copy nesting
+/// 3. MsgPackSerializer (Akka.NET's built-in MessagePack) — existing Akka.NET MessagePack serializer
+/// 4. V2 MessagePack (ICodecWriter on shared buffer) — single buffer, zero-copy nesting
 ///
 /// V2 vs Newtonsoft.Json shows the full migration benefit (format + API).
 /// V2 vs V1 MessagePack isolates the zero-copy nesting improvement (API shape only).
@@ -41,11 +43,16 @@ public class EnvelopeBenchmarks
     // V1 MessagePack infrastructure (ToBinary() -> byte[] pattern)
     private V1MessagePackEnvelopeSerializer _v1Serializer = null!;
 
+    // Akka.NET MsgPackSerializer (for comparison with V1/V2)
+    private MsgPackSerializer _msgPackSerializer = null!;
+
     // Pre-serialized data for deserialization benchmarks
     private byte[] _v2OneLayerBytes = null!;
     private byte[] _v2ThreeLayerBytes = null!;
     private byte[] _v1OneLayerBytes = null!;
     private byte[] _v1ThreeLayerBytes = null!;
+    private byte[] _msgPackOneLayerBytes = null!;
+    private byte[] _msgPackThreeLayerBytes = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -72,6 +79,9 @@ public class EnvelopeBenchmarks
 
         // V1 MessagePack setup
         _v1Serializer = new V1MessagePackEnvelopeSerializer();
+
+        // MsgPackSerializer setup (Akka.NET's built-in MessagePack serializer)
+        _msgPackSerializer = new MsgPackSerializer(_actorSystem.AsInstanceOf<ExtendedActorSystem>());
 
         // One-layer envelope: Remote -> UserCreated
         _oneLayerEnvelope = new RemoteEnvelope(
@@ -112,6 +122,10 @@ public class EnvelopeBenchmarks
         _v1OneLayerBytes = _v1Serializer.SerializeOneLayer(_oneLayerEnvelope, _innerMessage);
         _v1ThreeLayerBytes = _v1Serializer.SerializeThreeLayer(
             _threeLayerEnvelope, ddataEnvelope, innerRemote, _innerMessage);
+
+        // Pre-serialize MsgPackSerializer data for deserialization benchmarks
+        _msgPackOneLayerBytes = _msgPackSerializer.ToBinary(_oneLayerEnvelope);
+        _msgPackThreeLayerBytes = _msgPackSerializer.ToBinary(_threeLayerEnvelope);
     }
 
     [GlobalCleanup]
@@ -160,6 +174,15 @@ public class EnvelopeBenchmarks
     public byte[] V1MessagePack_1Layer_Serialize()
     {
         return _v1Serializer.SerializeOneLayer(_oneLayerEnvelope, _innerMessage);
+    }
+
+    /// <summary>
+    /// MsgPackSerializer: Akka.NET's built-in MessagePack serializer for 1-layer envelope.
+    /// </summary>
+    [Benchmark]
+    public byte[] MsgPackSerializer_1Layer_Serialize()
+    {
+        return _msgPackSerializer.ToBinary(_oneLayerEnvelope);
     }
 
     /// <summary>
@@ -238,6 +261,15 @@ public class EnvelopeBenchmarks
     }
 
     /// <summary>
+    /// MsgPackSerializer: Akka.NET's built-in MessagePack serializer for 3-layer envelope.
+    /// </summary>
+    [Benchmark]
+    public byte[] MsgPackSerializer_3Layer_Serialize()
+    {
+        return _msgPackSerializer.ToBinary(_threeLayerEnvelope);
+    }
+
+    /// <summary>
     /// V2 MessagePack pattern: 3-layer envelope.
     /// Single buffer for all layers via zero-copy nesting.
     /// </summary>
@@ -263,6 +295,15 @@ public class EnvelopeBenchmarks
     }
 
     /// <summary>
+    /// MsgPackSerializer: Akka.NET's built-in MessagePack deserializer for 1-layer envelope.
+    /// </summary>
+    [Benchmark]
+    public object MsgPackSerializer_1Layer_Deserialize()
+    {
+        return _msgPackSerializer.FromBinary(_msgPackOneLayerBytes, typeof(RemoteEnvelope));
+    }
+
+    /// <summary>
     /// V2 deserialization: 1-layer envelope from pre-serialized bytes.
     /// </summary>
     [Benchmark]
@@ -279,6 +320,15 @@ public class EnvelopeBenchmarks
     public RemoteEnvelope V1MessagePack_3Layer_Deserialize()
     {
         return _v1Serializer.DeserializeThreeLayer(_v1ThreeLayerBytes);
+    }
+
+    /// <summary>
+    /// MsgPackSerializer: Akka.NET's built-in MessagePack deserializer for 3-layer envelope.
+    /// </summary>
+    [Benchmark]
+    public object MsgPackSerializer_3Layer_Deserialize()
+    {
+        return _msgPackSerializer.FromBinary(_msgPackThreeLayerBytes, typeof(RemoteEnvelope));
     }
 
     /// <summary>
