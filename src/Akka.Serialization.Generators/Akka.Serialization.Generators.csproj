@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <!-- Source generators must target netstandard2.0, which doesn't support nullable -->
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <!-- Disable implicit usings to avoid pulling in Akka types not available to the generator -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Override global TreatWarningsAsErrors for netstandard2.0 compatibility -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- Remove global usings from Directory.Build.props -->
+  <ItemGroup>
+    <Using Remove="Akka.Event" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Exclude SourceLink for netstandard2.0 compatibility -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" Condition="'$(TargetFramework)' != 'netstandard2.0'" />
+  </ItemGroup>
+
+</Project>
