@@ -55,19 +55,19 @@ public sealed record OrderPlacedAnnotated(
 /// <remarks>
 /// User writes:
 /// <code>
-/// [AkkaSerializerModule(SerializerId = 5002)]
+/// [AkkaSerializerModule(SerializerId = 6001)]
 /// public partial class AnnotatedMessageSerializer { }
 /// </code>
 ///
 /// Generator produces:
-/// - Identifier property returning 5002
+/// - Identifier property returning 6001
 /// - Manifest() method routing based on [AkkaSerializable] types
 /// - Write() method dispatching to type-specific writers
 /// - Read() method dispatching based on manifest string
 /// - WriteXxx/ReadXxx methods for each [AkkaSerializable] type
 /// - Field serialization in [AkkaField] index order
 /// </remarks>
-[AkkaSerializerModule(SerializerId = 5002)]
+[AkkaSerializerModule(SerializerId = 6001)]
 public partial class AnnotatedMessageSerializer
 {
     // Source generator will implement SerializerV2 members here in Phase 5
