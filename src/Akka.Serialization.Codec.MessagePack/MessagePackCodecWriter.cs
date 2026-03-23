@@ -90,9 +90,7 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteGuid(Guid value)
     {
-        // Write Guid as 16-byte binary
-        // Use ToByteArray() instead of stackalloc to avoid ref struct scope issues
-        //var guidBytes = value.ToByteArray();
+        // Write Guid as 16-byte binary directly into the buffer (zero-copy)
         var writer = new MessagePackWriter(_buffer);
         writer.WriteBinHeader(16);
         value.TryWriteBytes(writer.GetSpan(16));
