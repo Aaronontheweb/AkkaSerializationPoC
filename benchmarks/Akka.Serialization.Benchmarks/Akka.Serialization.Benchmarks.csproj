@@ -9,13 +9,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Akka.Serialization.V2\Akka.Serialization.V2.csproj" />
-    <ProjectReference Include="..\..\src\Akka.Serialization.MessagePack\Akka.Serialization.MessagePack.csproj" />
+    <ProjectReference Include="..\..\src\Akka.Serialization.Codec.MessagePack\Akka.Serialization.Codec.MessagePack.csproj" />
     <ProjectReference Include="..\..\src\Akka.Serialization.Generators\Akka.Serialization.Generators.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\tests\Akka.Serialization.V2.Tests\Akka.Serialization.V2.Tests.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Akka.Serialization.MessagePack2" />
     <PackageReference Include="BenchmarkDotNet" />
   </ItemGroup>
 

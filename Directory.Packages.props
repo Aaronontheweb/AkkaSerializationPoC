@@ -8,6 +8,7 @@
   <ItemGroup>
     <PackageVersion Include="Akka.Hosting" Version="$(AkkaHostingVersion)"/>
     <PackageVersion Include="Akka.Hosting.TestKit" Version="$(AkkaHostingVersion)"/>
+    <PackageVersion Include="Akka.Serialization.MessagePack2" Version="1.5.60"/>
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.3"/>
     <PackageVersion Include="MessagePack" Version="3.1.4"/>
   </ItemGroup>
