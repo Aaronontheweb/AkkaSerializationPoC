@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Text;
-using Akka.Serialization.MessagePack;
 using Akka.Serialization.V2;
 using FluentAssertions;
 using Xunit;
@@ -77,7 +76,6 @@ public class MultiModuleTests
 
     private readonly InventorySerializer _inventorySerializer = new();
     private readonly ShippingSerializer _shippingSerializer = new();
-    private readonly MessagePackCodecProvider _codec = MessagePackCodecProvider.Instance;
 
     // =====================================================================
     // Inventory serializer tests
@@ -89,10 +87,10 @@ public class MultiModuleTests
         var original = new ItemAdded("SKU-001", 42);
 
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _inventorySerializer.Write(writer, original);
 
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (ItemAdded)_inventorySerializer.Read(reader, "item-added-v1");
 
         deserialized.Sku.Should().Be("SKU-001");
@@ -105,10 +103,10 @@ public class MultiModuleTests
         var original = new ItemRemoved("SKU-002", 10);
 
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _inventorySerializer.Write(writer, original);
 
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (ItemRemoved)_inventorySerializer.Read(reader, "item-removed-v1");
 
         deserialized.Sku.Should().Be("SKU-002");
@@ -133,10 +131,10 @@ public class MultiModuleTests
             new DateTime(2024, 6, 15, 10, 0, 0, DateTimeKind.Utc));
 
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _shippingSerializer.Write(writer, original);
 
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (ShipmentCreated)_shippingSerializer.Read(reader, "shipment-created-v1");
 
         deserialized.ShipmentId.Should().Be("SHIP-001");
@@ -151,10 +149,10 @@ public class MultiModuleTests
             new DateTime(2024, 7, 1, 14, 30, 0, DateTimeKind.Utc));
 
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _shippingSerializer.Write(writer, original);
 
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (ShipmentDelivered)_shippingSerializer.Read(reader, "shipment-delivered-v1");
 
         deserialized.ShipmentId.Should().Be("SHIP-002");

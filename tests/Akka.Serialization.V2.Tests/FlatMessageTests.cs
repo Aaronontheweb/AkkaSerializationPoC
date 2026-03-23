@@ -1,5 +1,5 @@
 using System.Buffers;
-using Akka.Serialization.MessagePack;
+using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using FluentAssertions;
 using Xunit;
@@ -12,7 +12,6 @@ namespace Akka.Serialization.V2.Tests;
 /// </summary>
 public class FlatMessageTests
 {
-    private readonly MessagePackCodecProvider _codecProvider = MessagePackCodecProvider.Instance;
     private readonly UserMessageSerializer _userSerializer = new();
     private readonly OrderMessageSerializer _orderSerializer = new();
 
@@ -27,14 +26,14 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _userSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _userSerializer.Manifest(original);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserCreated)_userSerializer.Read(reader, manifest!);
 
         // Assert
@@ -56,14 +55,14 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _userSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _userSerializer.Manifest(original);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserUpdated)_userSerializer.Read(reader, manifest!);
 
         // Assert
@@ -86,14 +85,14 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _userSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _userSerializer.Manifest(original);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserUpdated)_userSerializer.Read(reader, manifest!);
 
         // Assert
@@ -119,14 +118,14 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _orderSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _orderSerializer.Manifest(original);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (OrderPlaced)_orderSerializer.Read(reader, manifest!);
 
         // Assert
@@ -150,13 +149,13 @@ public class FlatMessageTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _orderSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (OrderPlaced)_orderSerializer.Read(reader, "order-placed-v1");
 
         // Assert - decimal must survive round-trip with EXACT precision
@@ -173,7 +172,7 @@ public class FlatMessageTests
 
         // Arrange - Manually create a UserCreated message with 4 fields (simulating V2)
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         // Write a UserCreated-like message with an extra field
         writer.BeginObject(4); // 4 fields instead of 3
         writer.WriteString("user-v2");
@@ -184,7 +183,7 @@ public class FlatMessageTests
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize with V1 deserializer (expects 3 fields)
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserCreated)_userSerializer.Read(reader, "user-created-v1");
 
         // Assert - Should successfully read the first 3 fields and skip the 4th
@@ -203,7 +202,7 @@ public class FlatMessageTests
 
         // Arrange - Manually create a UserUpdated message with only 2 fields (simulating V1)
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         // Write a UserUpdated-like message with only UserId and UpdatedAt (missing NewEmail and NewName)
         writer.BeginObject(2); // Only 2 fields instead of 4
         writer.WriteString("user-v1");
@@ -212,7 +211,7 @@ public class FlatMessageTests
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize with current deserializer (expects 4 fields)
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var fieldCount = reader.BeginReadObject();
 
         // Read available fields

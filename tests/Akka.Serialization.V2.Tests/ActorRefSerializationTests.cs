@@ -1,6 +1,6 @@
 using System.Buffers;
 using Akka.Actor;
-using Akka.Serialization.MessagePack;
+using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using FluentAssertions;
 using Xunit;
@@ -17,7 +17,6 @@ public class ActorRefSerializationTests : IDisposable
     private readonly ActorSystem _actorSystem;
     private readonly SerializerRegistry _registry;
     private readonly ActorRefMessageSerializer _serializer;
-    private readonly MessagePackCodecProvider _codec = MessagePackCodecProvider.Instance;
 
     public ActorRefSerializationTests()
     {
@@ -51,11 +50,11 @@ public class ActorRefSerializationTests : IDisposable
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _serializer.Write(writer, original);
 
         // Act - Deserialize
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (SubscribeToEvents)_serializer.Read(reader, "subscribe-to-events-v1");
 
         // Assert - Path preserved
@@ -88,11 +87,11 @@ public class ActorRefSerializationTests : IDisposable
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         remoteSerializer.Write(writer, envelope);
 
         // Act - Deserialize
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Assert

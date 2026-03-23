@@ -23,7 +23,7 @@ public sealed class RemoteEnvelopeSerializer : SerializerV2
         _ => throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj))
     };
 
-    public override void Write(ICodecWriter writer, object obj)
+    public override void Write(AkkaWriter writer, object obj)
     {
         if (obj is not RemoteEnvelope envelope)
             throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj));
@@ -52,7 +52,7 @@ public sealed class RemoteEnvelopeSerializer : SerializerV2
         innerSerializer.Write(writer, envelope.Message);
     }
 
-    public override object Read(ICodecReader reader, string manifest)
+    public override object Read(AkkaReader reader, string manifest)
     {
         if (manifest != "remote-envelope-v1")
             throw new ArgumentException($"Unknown manifest: {manifest}", nameof(manifest));
@@ -60,7 +60,7 @@ public sealed class RemoteEnvelopeSerializer : SerializerV2
         return ReadRemoteEnvelope(reader);
     }
 
-    private RemoteEnvelope ReadRemoteEnvelope(ICodecReader reader)
+    private RemoteEnvelope ReadRemoteEnvelope(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 

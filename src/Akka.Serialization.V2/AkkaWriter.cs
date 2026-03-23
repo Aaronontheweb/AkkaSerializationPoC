@@ -1,30 +1,34 @@
 using System.Buffers;
-using Akka.Serialization.V2;
 using MessagePack;
 
-namespace Akka.Serialization.MessagePack;
+namespace Akka.Serialization.V2;
 
 /// <summary>
-/// MessagePack-based implementation of ICodecWriter.
-/// Creates a new MessagePackWriter ref struct per operation, writing to a shared IBufferWriter&lt;byte&gt;.
+/// Concrete MessagePack-based writer for Akka.NET serialization.
+/// Wraps an <see cref="IBufferWriter{T}"/> and provides typed write methods.
 /// </summary>
 /// <remarks>
-/// The MessagePackWriter is a lightweight ref struct - creating one per operation is cheap.
-/// Each write operation creates a writer, writes one value, and flushes to the buffer.
-/// The buffer tracks position across calls - each new MessagePackWriter picks up where the previous left off.
+/// Multiple serializers can share the same AkkaWriter instance for zero-copy nested serialization.
+/// Each BeginObject(N) writes a MessagePack array header; nested serializer calls create nested arrays.
 ///
-/// DateTime is serialized as an array: [ticks (long), Kind (int)]
-/// DateTimeOffset is serialized as an array: [ticks (long), offset minutes (int)]
-/// Guid is serialized as 16-byte binary using MessagePack extension type.
+/// DateTime is serialized as [ticks (long), Kind (int)].
+/// DateTimeOffset is serialized as [ticks (long), offset minutes (int)].
+/// Guid is serialized as 16-byte binary.
+/// Decimal is serialized as [lo, mid, hi, flags] for lossless round-trip.
 /// </remarks>
-internal sealed class MessagePackCodecWriter : ICodecWriter
+public sealed class AkkaWriter
 {
     private readonly IBufferWriter<byte> _buffer;
 
-    public MessagePackCodecWriter(IBufferWriter<byte> buffer)
+    public AkkaWriter(IBufferWriter<byte> buffer)
     {
         _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
     }
+
+    /// <summary>
+    /// Exposes the underlying buffer for advanced scenarios (e.g. custom MessagePack extensions).
+    /// </summary>
+    public IBufferWriter<byte> RawBuffer => _buffer;
 
     public void BeginObject(int fieldCount)
     {
@@ -71,7 +75,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
     public void WriteDateTime(DateTime value)
     {
         var writer = new MessagePackWriter(_buffer);
-        // Serialize as [ticks (long), Kind (int)]
         writer.WriteArrayHeader(2);
         writer.Write(value.Ticks);
         writer.Write((int)value.Kind);
@@ -81,7 +84,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
     public void WriteDateTimeOffset(DateTimeOffset value)
     {
         var writer = new MessagePackWriter(_buffer);
-        // Serialize as [ticks (long), offset minutes (int)]
         writer.WriteArrayHeader(2);
         writer.Write(value.Ticks);
         writer.Write((int)value.Offset.TotalMinutes);
@@ -100,8 +102,6 @@ internal sealed class MessagePackCodecWriter : ICodecWriter
 
     public void WriteDecimal(decimal value)
     {
-        // Serialize as [lo, mid, hi, flags] array for lossless round-trip
-        // Consider: should we EXT for decimal for consistency with Messagepack-csharp built in ext spec?
         Span<int> bits = stackalloc int[4];
         var writer = new MessagePackWriter(_buffer);
         writer.WriteArrayHeader(4);

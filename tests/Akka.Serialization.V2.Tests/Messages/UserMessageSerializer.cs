@@ -17,7 +17,7 @@ public sealed class UserMessageSerializer : SerializerV2
         _ => throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj))
     };
 
-    public override void Write(ICodecWriter writer, object obj)
+    public override void Write(AkkaWriter writer, object obj)
     {
         switch (obj)
         {
@@ -32,7 +32,7 @@ public sealed class UserMessageSerializer : SerializerV2
         }
     }
 
-    public override object Read(ICodecReader reader, string manifest)
+    public override object Read(AkkaReader reader, string manifest)
     {
         return manifest switch
         {
@@ -42,7 +42,7 @@ public sealed class UserMessageSerializer : SerializerV2
         };
     }
 
-    private void WriteUserCreated(ICodecWriter writer, UserCreated msg)
+    private void WriteUserCreated(AkkaWriter writer, UserCreated msg)
     {
         // BeginObject with 3 fields: UserId, Email, CreatedAt
         writer.BeginObject(3);
@@ -51,7 +51,7 @@ public sealed class UserMessageSerializer : SerializerV2
         writer.WriteDateTime(msg.CreatedAt);
     }
 
-    private UserCreated ReadUserCreated(ICodecReader reader)
+    private UserCreated ReadUserCreated(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 
@@ -69,7 +69,7 @@ public sealed class UserMessageSerializer : SerializerV2
         return new UserCreated(userId, email, createdAt);
     }
 
-    private void WriteUserUpdated(ICodecWriter writer, UserUpdated msg)
+    private void WriteUserUpdated(AkkaWriter writer, UserUpdated msg)
     {
         // BeginObject with 4 fields: UserId, NewEmail, NewName, UpdatedAt
         writer.BeginObject(4);
@@ -89,7 +89,7 @@ public sealed class UserMessageSerializer : SerializerV2
         writer.WriteDateTime(msg.UpdatedAt);
     }
 
-    private UserUpdated ReadUserUpdated(ICodecReader reader)
+    private UserUpdated ReadUserUpdated(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 

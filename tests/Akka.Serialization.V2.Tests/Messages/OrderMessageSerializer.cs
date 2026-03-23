@@ -17,7 +17,7 @@ public sealed class OrderMessageSerializer : SerializerV2
         _ => throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj))
     };
 
-    public override void Write(ICodecWriter writer, object obj)
+    public override void Write(AkkaWriter writer, object obj)
     {
         if (obj is not OrderPlaced msg)
             throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj));
@@ -25,7 +25,7 @@ public sealed class OrderMessageSerializer : SerializerV2
         WriteOrderPlaced(writer, msg);
     }
 
-    public override object Read(ICodecReader reader, string manifest)
+    public override object Read(AkkaReader reader, string manifest)
     {
         return manifest switch
         {
@@ -34,7 +34,7 @@ public sealed class OrderMessageSerializer : SerializerV2
         };
     }
 
-    private void WriteOrderPlaced(ICodecWriter writer, OrderPlaced msg)
+    private void WriteOrderPlaced(AkkaWriter writer, OrderPlaced msg)
     {
         // BeginObject with 4 fields: OrderId, CustomerId, Amount, PlacedAt
         writer.BeginObject(4);
@@ -44,7 +44,7 @@ public sealed class OrderMessageSerializer : SerializerV2
         writer.WriteDateTimeOffset(msg.PlacedAt);
     }
 
-    private OrderPlaced ReadOrderPlaced(ICodecReader reader)
+    private OrderPlaced ReadOrderPlaced(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 

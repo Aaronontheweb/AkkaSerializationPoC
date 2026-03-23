@@ -16,7 +16,7 @@ namespace Akka.Serialization.Benchmarks;
 /// 1. Newtonsoft.Json (Akka.NET default) — inner message via ToBinary() -> byte[], embedded as blob
 /// 2. V1 MessagePack (ToBinary() -> byte[]) — same wire format as V2, but each layer allocates byte[]
 /// 3. MsgPackSerializer (Akka.NET's built-in MessagePack) — existing Akka.NET MessagePack serializer
-/// 4. V2 MessagePack (ICodecWriter on shared buffer) — single buffer, zero-copy nesting
+/// 4. V2 MessagePack (AkkaWriter on shared buffer) — single buffer, zero-copy nesting
 ///
 /// V2 vs Newtonsoft.Json shows the full migration benefit (format + API).
 /// V2 vs V1 MessagePack isolates the zero-copy nesting improvement (API shape only).
@@ -109,12 +109,12 @@ public class EnvelopeBenchmarks
 
         // Pre-serialize V2 data for deserialization benchmarks
         var tempBuffer = new ArrayBufferWriter<byte>(1024);
-        var writer = MessagePackCodecProvider.Instance.CreateWriter(tempBuffer);
+        var writer = new AkkaWriter(tempBuffer);
         _remoteSerializer.Write(writer, _oneLayerEnvelope);
         _v2OneLayerBytes = tempBuffer.WrittenSpan.ToArray();
 
         tempBuffer = new ArrayBufferWriter<byte>(1024);
-        writer = MessagePackCodecProvider.Instance.CreateWriter(tempBuffer);
+        writer = new AkkaWriter(tempBuffer);
         _remoteSerializer.Write(writer, _threeLayerEnvelope);
         _v2ThreeLayerBytes = tempBuffer.WrittenSpan.ToArray();
 
@@ -155,7 +155,7 @@ public class EnvelopeBenchmarks
         var innerBytes = _newtonsoftSerializer.ToBinary(_innerMessage);
 
         _buffer.Clear();
-        var outerWriter = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
+        var outerWriter = new AkkaWriter(_buffer);
         outerWriter.BeginObject(5);
         outerWriter.WriteString(_oneLayerEnvelope.RecipientPath);
         outerWriter.WriteString(_oneLayerEnvelope.SenderPath);
@@ -202,7 +202,7 @@ public class EnvelopeBenchmarks
     [Benchmark]
     public ArrayBufferWriter<byte> V2_1Layer_Serialize()
     {
-        var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
+        var writer = new AkkaWriter(_buffer);
         _remoteSerializer.Write(writer, _oneLayerEnvelope);
         return _buffer;
     }
@@ -223,7 +223,7 @@ public class EnvelopeBenchmarks
 
         // Layer 2: Inner RemoteEnvelope embedding layer1Bytes
         var layer2Buffer = new ArrayBufferWriter<byte>(256);
-        var layer2Writer = MessagePackCodecProvider.Instance.CreateWriter(layer2Buffer);
+        var layer2Writer = new AkkaWriter(layer2Buffer);
         layer2Writer.BeginObject(5);
         layer2Writer.WriteString("/user/inner-recipient");
         layer2Writer.WriteString("/user/inner-sender");
@@ -234,7 +234,7 @@ public class EnvelopeBenchmarks
 
         // Layer 3: DDataEnvelope embedding layer2Bytes
         var layer3Buffer = new ArrayBufferWriter<byte>(512);
-        var layer3Writer = MessagePackCodecProvider.Instance.CreateWriter(layer3Buffer);
+        var layer3Writer = new AkkaWriter(layer3Buffer);
         layer3Writer.BeginObject(5);
         layer3Writer.WriteString("replicated-key");
         layer3Writer.WriteInt64(42L);
@@ -245,7 +245,7 @@ public class EnvelopeBenchmarks
 
         // Layer 4 (outermost): RemoteEnvelope embedding layer3Bytes
         _buffer.Clear();
-        var outerWriter = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
+        var outerWriter = new AkkaWriter(_buffer);
         outerWriter.BeginObject(5);
         outerWriter.WriteString(_threeLayerEnvelope.RecipientPath);
         outerWriter.WriteString(_threeLayerEnvelope.SenderPath);
@@ -296,7 +296,7 @@ public class EnvelopeBenchmarks
     [Benchmark]
     public ArrayBufferWriter<byte> V2_3Layer_Serialize()
     {
-        var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
+        var writer = new AkkaWriter(_buffer);
         _remoteSerializer.Write(writer, _threeLayerEnvelope);
         return _buffer;
     }
@@ -329,7 +329,7 @@ public class EnvelopeBenchmarks
     [Benchmark]
     public RemoteEnvelope V2_1Layer_Deserialize()
     {
-        var reader = MessagePackCodecProvider.Instance.CreateReader(_v2OneLayerBytes);
+        var reader = new AkkaReader(_v2OneLayerBytes);
         return (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
     }
 
@@ -357,7 +357,7 @@ public class EnvelopeBenchmarks
     [Benchmark]
     public RemoteEnvelope V2_3Layer_Deserialize()
     {
-        var reader = MessagePackCodecProvider.Instance.CreateReader(_v2ThreeLayerBytes);
+        var reader = new AkkaReader(_v2ThreeLayerBytes);
         return (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
     }
 }

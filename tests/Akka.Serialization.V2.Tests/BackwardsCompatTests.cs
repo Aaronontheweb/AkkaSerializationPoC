@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Text.Json;
 using Akka.Actor;
-using Akka.Serialization.MessagePack;
+using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using FluentAssertions;
 using Xunit;
@@ -55,7 +55,6 @@ public sealed class LegacyUserSerializer : SerializerWithStringManifest
 public class BackwardsCompatTests : IDisposable
 {
     private readonly ActorSystem _actorSystem;
-    private readonly MessagePackCodecProvider _codecProvider = MessagePackCodecProvider.Instance;
 
     public BackwardsCompatTests()
     {
@@ -85,14 +84,14 @@ public class BackwardsCompatTests : IDisposable
 
         // Act - Serialize through adapter via V2 codec
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         adapter.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize through adapter via V2 codec
         var manifest = adapter.Manifest(original);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserCreated)adapter.Read(reader, manifest!);
 
         // Assert
@@ -135,14 +134,14 @@ public class BackwardsCompatTests : IDisposable
 
         // Act - Serialize the entire envelope (V2 envelope wrapping legacy-adapted inner message)
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         remoteSerializer.Write(writer, envelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = remoteSerializer.Manifest(envelope);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, manifest!);
 
         // Assert - Envelope metadata preserved
@@ -206,11 +205,11 @@ public class BackwardsCompatTests : IDisposable
 
         // Act & Assert - Round-trip UserCreated through legacy adapter
         var createdBuffer = new ArrayBufferWriter<byte>();
-        var createdWriter = _codecProvider.CreateWriter(createdBuffer);
+        var createdWriter = new AkkaWriter(createdBuffer);
         createdSerializer.Write(createdWriter, userCreated);
 
         var createdManifest = createdSerializer.Manifest(userCreated);
-        var createdReader = _codecProvider.CreateReader(createdBuffer.WrittenMemory);
+        var createdReader = new AkkaReader(createdBuffer.WrittenMemory);
         var deserializedCreated = (UserCreated)createdSerializer.Read(createdReader, createdManifest!);
 
         deserializedCreated.UserId.Should().Be(userCreated.UserId);
@@ -219,11 +218,11 @@ public class BackwardsCompatTests : IDisposable
 
         // Act & Assert - Round-trip UserUpdated through native V2 serializer
         var updatedBuffer = new ArrayBufferWriter<byte>();
-        var updatedWriter = _codecProvider.CreateWriter(updatedBuffer);
+        var updatedWriter = new AkkaWriter(updatedBuffer);
         updatedSerializer.Write(updatedWriter, userUpdated);
 
         var updatedManifest = updatedSerializer.Manifest(userUpdated);
-        var updatedReader = _codecProvider.CreateReader(updatedBuffer.WrittenMemory);
+        var updatedReader = new AkkaReader(updatedBuffer.WrittenMemory);
         var deserializedUpdated = (UserUpdated)updatedSerializer.Read(updatedReader, updatedManifest!);
 
         deserializedUpdated.UserId.Should().Be(userUpdated.UserId);

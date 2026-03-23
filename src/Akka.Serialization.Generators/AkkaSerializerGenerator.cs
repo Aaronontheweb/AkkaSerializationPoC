@@ -1061,7 +1061,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         StringBuilder sb,
         ImmutableArray<SerializableTypeInfo> serializables)
     {
-        sb.AppendLine("    public override void Write(Akka.Serialization.V2.ICodecWriter writer, object obj)");
+        sb.AppendLine("    public override void Write(Akka.Serialization.V2.AkkaWriter writer, object obj)");
         sb.AppendLine("    {");
         sb.AppendLine("        switch (obj)");
         sb.AppendLine("        {");
@@ -1085,7 +1085,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         StringBuilder sb,
         ImmutableArray<SerializableTypeInfo> serializables)
     {
-        sb.AppendLine("    public override object Read(Akka.Serialization.V2.ICodecReader reader, string manifest)");
+        sb.AppendLine("    public override object Read(Akka.Serialization.V2.AkkaReader reader, string manifest)");
         sb.AppendLine("    {");
         sb.AppendLine("        return manifest switch");
         sb.AppendLine("        {");
@@ -1106,7 +1106,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         StringBuilder sb,
         SerializableTypeInfo type)
     {
-        sb.AppendLine("    private void Write" + type.SimpleName + "(Akka.Serialization.V2.ICodecWriter writer, " + type.FullyQualifiedName + " msg)");
+        sb.AppendLine("    private void Write" + type.SimpleName + "(Akka.Serialization.V2.AkkaWriter writer, " + type.FullyQualifiedName + " msg)");
         sb.AppendLine("    {");
         sb.AppendLine("        writer.BeginObject(" + type.Fields.Length + ");");
 
@@ -1123,7 +1123,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
         StringBuilder sb,
         SerializableTypeInfo type)
     {
-        sb.AppendLine("    private " + type.FullyQualifiedName + " Read" + type.SimpleName + "(Akka.Serialization.V2.ICodecReader reader)");
+        sb.AppendLine("    private " + type.FullyQualifiedName + " Read" + type.SimpleName + "(Akka.Serialization.V2.AkkaReader reader)");
         sb.AppendLine("    {");
         sb.AppendLine("        var fieldCount = reader.BeginReadObject();");
 
@@ -1156,7 +1156,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
 
     private static void GenerateNestedWriteHelper(StringBuilder sb, NestedTypeInfo nested)
     {
-        sb.AppendLine("    private void Write" + nested.SimpleName + "(Akka.Serialization.V2.ICodecWriter writer, " + nested.FullyQualifiedName + " msg)");
+        sb.AppendLine("    private void Write" + nested.SimpleName + "(Akka.Serialization.V2.AkkaWriter writer, " + nested.FullyQualifiedName + " msg)");
         sb.AppendLine("    {");
         sb.AppendLine("        writer.BeginObject(" + nested.Fields.Length + ");");
 
@@ -1171,7 +1171,7 @@ public class AkkaSerializerGenerator : IIncrementalGenerator
 
     private static void GenerateNestedReadHelper(StringBuilder sb, NestedTypeInfo nested)
     {
-        sb.AppendLine("    private " + nested.FullyQualifiedName + " Read" + nested.SimpleName + "(Akka.Serialization.V2.ICodecReader reader)");
+        sb.AppendLine("    private " + nested.FullyQualifiedName + " Read" + nested.SimpleName + "(Akka.Serialization.V2.AkkaReader reader)");
         sb.AppendLine("    {");
         sb.AppendLine("        var fieldCount = reader.BeginReadObject();");
 

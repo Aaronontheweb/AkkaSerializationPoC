@@ -15,7 +15,7 @@ public sealed class ActorRefMessageSerializer : SerializerV2
         _ => throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj))
     };
 
-    public override void Write(ICodecWriter writer, object obj)
+    public override void Write(AkkaWriter writer, object obj)
     {
         switch (obj)
         {
@@ -29,7 +29,7 @@ public sealed class ActorRefMessageSerializer : SerializerV2
         }
     }
 
-    public override object Read(ICodecReader reader, string manifest)
+    public override object Read(AkkaReader reader, string manifest)
     {
         return manifest switch
         {
@@ -38,7 +38,7 @@ public sealed class ActorRefMessageSerializer : SerializerV2
         };
     }
 
-    private SubscribeToEvents ReadSubscribeToEvents(ICodecReader reader)
+    private SubscribeToEvents ReadSubscribeToEvents(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
         var subscriberPath = reader.ReadString() ?? string.Empty;

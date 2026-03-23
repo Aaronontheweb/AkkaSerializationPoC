@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Collections.Immutable;
-using Akka.Serialization.MessagePack;
 using Akka.Serialization.V2;
 using FluentAssertions;
 using Xunit;
@@ -95,15 +94,14 @@ public partial class ComplexProtocolSerializer : SerializerV2<IComplexProtocol> 
 public class NestedTypeTests
 {
     private readonly ComplexProtocolSerializer _serializer = new();
-    private readonly MessagePackCodecProvider _codec = MessagePackCodecProvider.Instance;
 
     private T RoundTrip<T>(T obj, string manifest) where T : class
     {
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _serializer.Write(writer, obj);
 
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         return (T)_serializer.Read(reader, manifest);
     }
 

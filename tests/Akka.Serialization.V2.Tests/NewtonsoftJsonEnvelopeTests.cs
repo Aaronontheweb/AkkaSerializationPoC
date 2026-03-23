@@ -1,6 +1,6 @@
 using System.Buffers;
 using Akka.Actor;
-using Akka.Serialization.MessagePack;
+using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using FluentAssertions;
 using Xunit;
@@ -16,7 +16,6 @@ namespace Akka.Serialization.V2.Tests;
 public class NewtonsoftJsonEnvelopeTests : IDisposable
 {
     private readonly ActorSystem _actorSystem;
-    private readonly MessagePackCodecProvider _codecProvider = MessagePackCodecProvider.Instance;
 
     public NewtonsoftJsonEnvelopeTests()
     {
@@ -45,14 +44,14 @@ public class NewtonsoftJsonEnvelopeTests : IDisposable
 
         // Act - Serialize through adapter
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         adapter.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize through adapter
         var manifest = adapter.Manifest(original);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserCreated)adapter.Read(reader, manifest!);
 
         // Assert
@@ -88,11 +87,11 @@ public class NewtonsoftJsonEnvelopeTests : IDisposable
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         remoteSerializer.Write(writer, envelope);
 
         // Act - Deserialize
-        var reader = _codecProvider.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Assert - Envelope metadata preserved
@@ -140,11 +139,11 @@ public class NewtonsoftJsonEnvelopeTests : IDisposable
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         remoteSerializer.Write(writer, remoteEnvelope);
 
         // Act - Deserialize
-        var reader = _codecProvider.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Assert - All layers preserved
