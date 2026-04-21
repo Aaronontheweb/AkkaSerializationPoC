@@ -1,5 +1,5 @@
 using System.Buffers;
-using Akka.Serialization.MessagePack;
+using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using FluentAssertions;
 using Xunit;
@@ -22,7 +22,6 @@ public class ReferenceGeneratedTests
     private readonly AnnotatedMessageSerializer _generatedSerializer = new();
     private readonly UserMessageSerializer _handWrittenUserSerializer = new();
     private readonly OrderMessageSerializer _handWrittenOrderSerializer = new();
-    private readonly MessagePackCodecProvider _codec = MessagePackCodecProvider.Instance;
 
     // =====================================================================
     // Round-trip tests
@@ -39,14 +38,14 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _generatedSerializer.Manifest(original);
-        var reader = _codec.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
@@ -68,14 +67,14 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _generatedSerializer.Manifest(original);
-        var reader = _codec.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserUpdatedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
@@ -98,14 +97,14 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _generatedSerializer.Manifest(original);
-        var reader = _codec.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserUpdatedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
@@ -131,14 +130,14 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _generatedSerializer.Write(writer, original);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _generatedSerializer.Manifest(original);
-        var reader = _codec.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (OrderPlacedAnnotated)_generatedSerializer.Read(reader, manifest!);
 
         // Assert
@@ -166,12 +165,12 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        var handWriter = new AkkaWriter(handWrittenBuffer);
         _handWrittenUserSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        var genWriter = _codec.CreateWriter(generatedBuffer);
+        var genWriter = new AkkaWriter(generatedBuffer);
         _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
@@ -192,12 +191,12 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        var handWriter = new AkkaWriter(handWrittenBuffer);
         _handWrittenUserSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        var genWriter = _codec.CreateWriter(generatedBuffer);
+        var genWriter = new AkkaWriter(generatedBuffer);
         _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
@@ -218,12 +217,12 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        var handWriter = new AkkaWriter(handWrittenBuffer);
         _handWrittenUserSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        var genWriter = _codec.CreateWriter(generatedBuffer);
+        var genWriter = new AkkaWriter(generatedBuffer);
         _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
@@ -245,12 +244,12 @@ public class ReferenceGeneratedTests
 
         // Act - Serialize with hand-written serializer
         var handWrittenBuffer = new ArrayBufferWriter<byte>();
-        var handWriter = _codec.CreateWriter(handWrittenBuffer);
+        var handWriter = new AkkaWriter(handWrittenBuffer);
         _handWrittenOrderSerializer.Write(handWriter, handWrittenMsg);
 
         // Act - Serialize with generated serializer
         var generatedBuffer = new ArrayBufferWriter<byte>();
-        var genWriter = _codec.CreateWriter(generatedBuffer);
+        var genWriter = new AkkaWriter(generatedBuffer);
         _generatedSerializer.Write(genWriter, generatedMsg);
 
         // Assert - Byte arrays must be identical
@@ -271,7 +270,7 @@ public class ReferenceGeneratedTests
         // Simulate V1 data that only had 2 fields (UserId, Email)
         // being deserialized by V2 reader expecting 3 fields (UserId, Email, CreatedAt)
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         writer.BeginObject(2); // Only 2 fields instead of 3
         writer.WriteString("user-old");
         writer.WriteString("old@example.com");
@@ -279,7 +278,7 @@ public class ReferenceGeneratedTests
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize with current deserializer (expects 3 fields)
-        var reader = _codec.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, "user-created-v1");
 
         // Assert - Should read available fields and use defaults for missing ones
@@ -298,7 +297,7 @@ public class ReferenceGeneratedTests
 
         // Arrange - Manually create a UserCreatedAnnotated message with 4 fields (simulating V2)
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         // Write a UserCreatedAnnotated-like message with an extra field
         writer.BeginObject(4); // 4 fields instead of 3
         writer.WriteString("user-v2");
@@ -309,7 +308,7 @@ public class ReferenceGeneratedTests
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize with V1 deserializer (expects 3 fields)
-        var reader = _codec.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (UserCreatedAnnotated)_generatedSerializer.Read(reader, "user-created-v1");
 
         // Assert - Should successfully read the first 3 fields and skip the 4th

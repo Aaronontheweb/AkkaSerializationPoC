@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace Akka.Serialization.V2;
 
 /// <summary>
@@ -6,19 +8,27 @@ namespace Akka.Serialization.V2;
 /// </summary>
 /// <remarks>
 /// Key differences from legacy serializers:
-/// - Write takes ICodecWriter instead of returning byte[]
-/// - Read takes ICodecReader instead of byte[]
+/// - Write takes AkkaWriter instead of returning byte[]
+/// - Read takes AkkaReader instead of byte[]
 /// - Multiple serializers can share the same writer/reader for zero-copy nesting
 ///
 /// Wire format contract: (SerializerId, Manifest, Payload)
 /// - SerializerId: Unique integer identifying this serializer (same as legacy)
 /// - Manifest: String type hint for polymorphic deserialization
-/// - Payload: Codec-encoded message data (typically MessagePack array)
+/// - Payload: MessagePack-encoded fields (array format, may contain nested arrays)
 ///
 /// For zero-copy nested serialization:
 /// An envelope serializer writes its fields, then calls innerSerializer.Write(writer, innerMessage)
 /// using the SAME writer. The inner serializer's BeginObject becomes a nested array in the payload.
 /// All layers write to a single shared IBufferWriter&lt;byte&gt;.
+///
+/// V1 bridge: ToBinary/FromBinary methods enable V2 serializers to work with Akka.NET's
+/// existing byte[]-based transport. When the transport is upgraded to pass IBufferWriter&lt;byte&gt;
+/// directly, these methods are bypassed and the byte[] allocation disappears.
+///
+/// Integration path: In Akka.NET proper, this class would extend SerializerWithStringManifest
+/// so V2 serializers plug directly into HOCON config, the existing transport, and
+/// Akka.Serialization.Serialization — no separate registry needed.
 /// </remarks>
 public abstract class SerializerV2
 {
@@ -40,61 +50,51 @@ public abstract class SerializerV2
     /// Returns the manifest string for the given object.
     /// The manifest provides a type hint for polymorphic deserialization.
     /// </summary>
-    /// <param name="obj">The object to get a manifest for</param>
-    /// <returns>A manifest string identifying the object's type, or null for unambiguous types</returns>
     public abstract string? Manifest(object obj);
 
     /// <summary>
-    /// Writes the object to the codec writer.
+    /// Writes the object to the writer.
     /// The writer may be shared with other serializers for zero-copy nested serialization.
     /// </summary>
-    /// <param name="writer">The codec writer to write to</param>
-    /// <param name="obj">The object to serialize</param>
-    public abstract void Write(ICodecWriter writer, object obj);
+    public abstract void Write(AkkaWriter writer, object obj);
 
     /// <summary>
-    /// Reads an object from the codec reader using the manifest string.
+    /// Reads an object from the reader using the manifest string.
     /// The reader may be shared with other serializers for nested deserialization.
     /// </summary>
-    /// <param name="reader">The codec reader to read from</param>
-    /// <param name="manifest">The manifest string identifying the object's type</param>
-    /// <returns>The deserialized object</returns>
-    public abstract object Read(ICodecReader reader, string manifest);
+    public abstract object Read(AkkaReader reader, string manifest);
 
     /// <summary>
     /// Provides a size hint for buffer pre-allocation.
-    /// Implementations should return a reasonable estimate of the serialized size.
-    /// The default implementation returns 256 bytes.
     /// </summary>
-    /// <param name="obj">The object to estimate size for</param>
-    /// <returns>Estimated serialized size in bytes</returns>
     public virtual int SizeHint(object obj) => 256;
+
+    /// <summary>
+    /// V1 bridge: Serializes to byte[] for compatibility with Akka.NET's existing transport.
+    /// When the transport is upgraded to pass IBufferWriter&lt;byte&gt; directly, this allocation goes away.
+    /// </summary>
+    public byte[] ToBinary(object obj)
+    {
+        var buffer = new ArrayBufferWriter<byte>(SizeHint(obj));
+        var writer = new AkkaWriter(buffer);
+        Write(writer, obj);
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    /// V1 bridge: Deserializes from byte[] for compatibility with Akka.NET's existing transport.
+    /// </summary>
+    public object FromBinary(byte[] bytes, string manifest)
+    {
+        var reader = new AkkaReader(bytes);
+        return Read(reader, manifest);
+    }
 }
 
 /// <summary>
 /// Generic base class for protocol-scoped serializers.
-/// The type parameter <typeparamref name="TProtocol"/> defines a marker interface
-/// that scopes which message types belong to this serializer.
+/// The type parameter defines a marker interface that scopes which message types belong to this serializer.
 /// </summary>
-/// <typeparam name="TProtocol">
-/// A marker interface that all message types handled by this serializer must implement.
-/// The source generator uses this to filter which [AkkaSerializable] types are included.
-/// </typeparam>
-/// <remarks>
-/// Example usage:
-/// <code>
-/// // Define a protocol interface
-/// public interface IMyProtocol { }
-///
-/// // Messages implement the protocol
-/// [AkkaSerializable(Manifest = "user-created-v1")]
-/// public sealed record UserCreated(...) : IMyProtocol;
-///
-/// // Serializer is scoped to the protocol
-/// [AkkaSerializer(Name = "my-protocol")]
-/// public partial class MySerializer : SerializerV2&lt;IMyProtocol&gt; { }
-/// </code>
-/// </remarks>
 public abstract class SerializerV2<TProtocol> : SerializerV2
 {
 }

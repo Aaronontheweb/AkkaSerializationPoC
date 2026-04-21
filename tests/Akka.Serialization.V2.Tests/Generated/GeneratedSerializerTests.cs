@@ -1,5 +1,4 @@
 using System.Buffers;
-using Akka.Serialization.MessagePack;
 using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using FluentAssertions;
@@ -14,7 +13,6 @@ namespace Akka.Serialization.V2.Tests.Generated;
 public class GeneratedSerializerTests
 {
     private readonly AnnotatedMessageSerializer _generatedSerializer = new();
-    private readonly MessagePackCodecProvider _codec = MessagePackCodecProvider.Instance;
 
     [Fact]
     public void Generated_InEnvelope_RoundTrip()
@@ -33,11 +31,11 @@ public class GeneratedSerializerTests
 
         // Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codec.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         remoteSerializer.Write(writer, envelope);
 
         // Deserialize
-        var reader = _codec.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserialized = (RemoteEnvelope)remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Assert

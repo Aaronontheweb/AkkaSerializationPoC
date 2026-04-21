@@ -22,7 +22,7 @@ public partial class AnnotatedMessageSerializer
         _ => throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj))
     };
 
-    public override void Write(ICodecWriter writer, object obj)
+    public override void Write(AkkaWriter writer, object obj)
     {
         switch (obj)
         {
@@ -40,7 +40,7 @@ public partial class AnnotatedMessageSerializer
         }
     }
 
-    public override object Read(ICodecReader reader, string manifest)
+    public override object Read(AkkaReader reader, string manifest)
     {
         return manifest switch
         {
@@ -58,7 +58,7 @@ public partial class AnnotatedMessageSerializer
     // Generated based on [AkkaField] attributes in index order
     // =====================================================================
 
-    private void WriteUserCreatedAnnotated(ICodecWriter writer, UserCreatedAnnotated msg)
+    private void WriteUserCreatedAnnotated(AkkaWriter writer, UserCreatedAnnotated msg)
     {
         // BeginObject with 3 fields: UserId, Email, CreatedAt
         writer.BeginObject(3);
@@ -67,7 +67,7 @@ public partial class AnnotatedMessageSerializer
         writer.WriteDateTime(msg.CreatedAt);
     }
 
-    private UserCreatedAnnotated ReadUserCreatedAnnotated(ICodecReader reader)
+    private UserCreatedAnnotated ReadUserCreatedAnnotated(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 
@@ -85,7 +85,7 @@ public partial class AnnotatedMessageSerializer
         return new UserCreatedAnnotated(userId, email, createdAt);
     }
 
-    private void WriteUserUpdatedAnnotated(ICodecWriter writer, UserUpdatedAnnotated msg)
+    private void WriteUserUpdatedAnnotated(AkkaWriter writer, UserUpdatedAnnotated msg)
     {
         // BeginObject with 4 fields: UserId, NewEmail, NewName, UpdatedAt
         writer.BeginObject(4);
@@ -105,7 +105,7 @@ public partial class AnnotatedMessageSerializer
         writer.WriteDateTime(msg.UpdatedAt);
     }
 
-    private UserUpdatedAnnotated ReadUserUpdatedAnnotated(ICodecReader reader)
+    private UserUpdatedAnnotated ReadUserUpdatedAnnotated(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 
@@ -126,7 +126,7 @@ public partial class AnnotatedMessageSerializer
         return new UserUpdatedAnnotated(userId, newEmail, newName, updatedAt);
     }
 
-    private void WriteOrderPlacedAnnotated(ICodecWriter writer, OrderPlacedAnnotated msg)
+    private void WriteOrderPlacedAnnotated(AkkaWriter writer, OrderPlacedAnnotated msg)
     {
         // BeginObject with 4 fields: OrderId, CustomerId, Amount, PlacedAt
         writer.BeginObject(4);
@@ -136,7 +136,7 @@ public partial class AnnotatedMessageSerializer
         writer.WriteDateTimeOffset(msg.PlacedAt);
     }
 
-    private OrderPlacedAnnotated ReadOrderPlacedAnnotated(ICodecReader reader)
+    private OrderPlacedAnnotated ReadOrderPlacedAnnotated(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 

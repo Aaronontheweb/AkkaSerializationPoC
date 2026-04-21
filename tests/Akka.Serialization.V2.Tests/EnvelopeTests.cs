@@ -1,5 +1,5 @@
 using System.Buffers;
-using Akka.Serialization.MessagePack;
+using Akka.Serialization.V2;
 using Akka.Serialization.V2.Tests.Messages;
 using FluentAssertions;
 using Xunit;
@@ -12,7 +12,6 @@ namespace Akka.Serialization.V2.Tests;
 /// </summary>
 public class EnvelopeTests
 {
-    private readonly MessagePackCodecProvider _codecProvider = MessagePackCodecProvider.Instance;
     private readonly SerializerRegistry _registry;
     private readonly RemoteEnvelopeSerializer _remoteSerializer;
     private readonly DDataEnvelopeSerializer _ddataSerializer;
@@ -47,14 +46,14 @@ public class EnvelopeTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _remoteSerializer.Write(writer, envelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _remoteSerializer.Manifest(envelope);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, manifest!);
 
         // Assert
@@ -86,14 +85,14 @@ public class EnvelopeTests
 
         // Act - Serialize
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _ddataSerializer.Write(writer, envelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _ddataSerializer.Manifest(envelope);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (DDataEnvelope)_ddataSerializer.Read(reader, manifest!);
 
         // Assert
@@ -130,14 +129,14 @@ public class EnvelopeTests
 
         // Act - Serialize (all three layers write to single buffer)
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _remoteSerializer.Write(writer, remoteEnvelope);
 
         var bytes = buffer.WrittenMemory;
 
         // Act - Deserialize
         var manifest = _remoteSerializer.Manifest(remoteEnvelope);
-        var reader = _codecProvider.CreateReader(bytes);
+        var reader = new AkkaReader(bytes);
         var deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, manifest!);
 
         // Assert - Verify all three layers
@@ -183,14 +182,14 @@ public class EnvelopeTests
 
         // Act - Serialize to a single buffer
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _remoteSerializer.Write(writer, remoteEnvelope);
 
         // The buffer now contains all three layers serialized in a single contiguous block
         var serializedBytes = buffer.WrittenMemory;
 
         // Assert - We should be able to deserialize successfully
-        var reader = _codecProvider.CreateReader(serializedBytes);
+        var reader = new AkkaReader(serializedBytes);
         var deserialized = (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Verify the entire nested structure was preserved
@@ -223,11 +222,11 @@ public class EnvelopeTests
 
         // Act - Serialize envelope
         var buffer = new ArrayBufferWriter<byte>();
-        var writer = _codecProvider.CreateWriter(buffer);
+        var writer = new AkkaWriter(buffer);
         _remoteSerializer.Write(writer, envelope);
 
         // Act - Deserialize envelope and extract inner message
-        var reader = _codecProvider.CreateReader(buffer.WrittenMemory);
+        var reader = new AkkaReader(buffer.WrittenMemory);
         var deserializedEnvelope = (RemoteEnvelope)_remoteSerializer.Read(reader, "remote-envelope-v1");
 
         // Assert - Verify inner message is correctly deserialized

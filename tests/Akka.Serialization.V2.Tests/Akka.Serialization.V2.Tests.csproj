@@ -11,7 +11,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Akka.Serialization.V2\Akka.Serialization.V2.csproj" />
-    <ProjectReference Include="..\..\src\Akka.Serialization.Codec.MessagePack\Akka.Serialization.Codec.MessagePack.csproj" />
     <ProjectReference Include="..\..\src\Akka.Serialization.Generators\Akka.Serialization.Generators.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>

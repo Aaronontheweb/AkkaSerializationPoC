@@ -53,7 +53,7 @@ public partial class BenchProtocolSerializer : SerializerV2<IBenchmarkProtocol> 
 /// 1. Newtonsoft.Json (Akka.NET default) — what most users have today
 /// 2. V1 MessagePack (ToBinary() -> byte[]) — same wire format as V2, legacy API shape
 /// 3. MsgPackSerializer (Akka.NET's built-in MessagePack) — existing Akka.NET MessagePack serializer
-/// 4. V2 MessagePack (source-generated, ICodecWriter on shared buffer) — new API
+/// 4. V2 MessagePack (source-generated, AkkaWriter on shared buffer) — new API
 ///
 /// Parameterized by collection size to show scaling behavior.
 /// </summary>
@@ -124,7 +124,7 @@ public class ComplexMessageBenchmarks
         _msgPackBytes = _msgPackSerializer.ToBinary(_message);
 
         var v2Buffer = new ArrayBufferWriter<byte>(4096);
-        var writer = MessagePackCodecProvider.Instance.CreateWriter(v2Buffer);
+        var writer = new AkkaWriter(v2Buffer);
         _v2Serializer.Write(writer, _message);
         _v2Bytes = v2Buffer.WrittenSpan.ToArray();
     }
@@ -173,7 +173,7 @@ public class ComplexMessageBenchmarks
     [Benchmark]
     public ArrayBufferWriter<byte> V2_Serialize()
     {
-        var writer = MessagePackCodecProvider.Instance.CreateWriter(_buffer);
+        var writer = new AkkaWriter(_buffer);
         _v2Serializer.Write(writer, _message);
         return _buffer;
     }
@@ -203,7 +203,7 @@ public class ComplexMessageBenchmarks
     [Benchmark]
     public BenchOrder V2_Deserialize()
     {
-        var reader = MessagePackCodecProvider.Instance.CreateReader(_v2Bytes);
+        var reader = new AkkaReader(_v2Bytes);
         return (BenchOrder)_v2Serializer.Read(reader, "bench-order-v1");
     }
 }

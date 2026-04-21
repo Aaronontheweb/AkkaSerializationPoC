@@ -23,7 +23,7 @@ public sealed class DDataEnvelopeSerializer : SerializerV2
         _ => throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj))
     };
 
-    public override void Write(ICodecWriter writer, object obj)
+    public override void Write(AkkaWriter writer, object obj)
     {
         if (obj is not DDataEnvelope envelope)
             throw new ArgumentException($"Unsupported type: {obj.GetType()}", nameof(obj));
@@ -52,7 +52,7 @@ public sealed class DDataEnvelopeSerializer : SerializerV2
         innerSerializer.Write(writer, envelope.Data);
     }
 
-    public override object Read(ICodecReader reader, string manifest)
+    public override object Read(AkkaReader reader, string manifest)
     {
         if (manifest != "ddata-envelope-v1")
             throw new ArgumentException($"Unknown manifest: {manifest}", nameof(manifest));
@@ -60,7 +60,7 @@ public sealed class DDataEnvelopeSerializer : SerializerV2
         return ReadDDataEnvelope(reader);
     }
 
-    private DDataEnvelope ReadDDataEnvelope(ICodecReader reader)
+    private DDataEnvelope ReadDDataEnvelope(AkkaReader reader)
     {
         var fieldCount = reader.BeginReadObject();
 
